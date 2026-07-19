@@ -17,8 +17,9 @@ function engineFiles(): string[] {
 /** Patterns that must never appear in engine source (excluding comments/allowed uses). */
 const FORBIDDEN: { pattern: RegExp; reason: string }[] = [
   { pattern: /\bMath\.random\b/, reason: 'randomness must go through the injected Rng' },
-  { pattern: /\bwindow\b/, reason: 'engine must not touch the DOM' },
-  { pattern: /\bdocument\b/, reason: 'engine must not touch the DOM' },
+  // Match DOM-global usage (property/index access), not the English word "window".
+  { pattern: /\bwindow[.[]/, reason: 'engine must not touch the DOM' },
+  { pattern: /\bdocument[.[]/, reason: 'engine must not touch the DOM' },
   { pattern: /\bnew Date\b/, reason: 'engine must be deterministic (no wall clock)' },
   { pattern: /\bDate\.now\b/, reason: 'engine must be deterministic (no wall clock)' },
   { pattern: /from ['"]react/, reason: 'engine must not import React' },
