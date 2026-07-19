@@ -1,0 +1,8 @@
+node_modules
+dist
+*.local
+.DS_Store
+*.tsbuildinfo
+
+# Personal Claude Code settings; project-shared settings.json stays tracked.
+.claude/settings.local.json
