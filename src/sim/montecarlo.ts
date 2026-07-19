@@ -78,7 +78,7 @@ function main(): void {
   const seed = Number(process.env['SIM_SEED'] ?? 20260719)
 
   console.log(`Monte Carlo — ${trials.toLocaleString('it-IT')} mani, seed ${seed}`)
-  console.log('Strategia: furto greedy + reroll euristico (max 3), stessa del bot.\n')
+  console.log('Strategia: furto greedy + reroll euristico (fino a 4), stessa del bot.\n')
 
   const counts = runSimulation(trials, seed)
 

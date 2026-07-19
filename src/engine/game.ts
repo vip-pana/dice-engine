@@ -63,7 +63,6 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
     currentBet: 0,
     raisesThisWindow: 0,
     aggressor: null,
-    checksThisWindow: 0,
     toAct: primary,
     firstBetAmount: 0,
     lastShowdown: null,
@@ -128,13 +127,11 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
     case 'ROLL_OFF':
       return handleRollOff(state, rng)
     case 'OPEN':
-      return handleOpen(state, action.player)
+      return handleOpen(state, action.player, action.amount)
     case 'CALL':
       return handleCall(state, action.player, rng)
     case 'RAISE':
-      return handleRaise(state, action.player)
-    case 'FOLD':
-      return handleFold(state, action.player)
+      return handleRaise(state, action.player, action.amount)
     case 'STEAL':
       return handleSteal(state, action.player, action.commonIndex)
     case 'REROLL':
@@ -180,89 +177,76 @@ function inBettingPhase(state: GameState): boolean {
   return state.phase === 'INITIAL_BET' || state.phase === 'SECOND_BET'
 }
 
-function handleOpen(state: GameState, player: PlayerId): GameState {
-  assert(state.phase === 'INITIAL_BET', 'OPEN only allowed in INITIAL_BET')
-  assert(state.toAct === player, 'not this player to act')
-  assert(player === state.primary, 'only the primary opens the initial bet')
-  assert(state.currentBet === 0, 'bet already opened')
+/** The minimum an opening bet must be for the current phase. */
+function openMinimum(state: GameState): number {
+  // First bet: at least config.minBet. Second bet: at least the settled first bet.
+  return state.phase === 'SECOND_BET' ? state.firstBetAmount : state.config.minBet
+}
 
-  const ante = state.config.ante
-  let next = commit(state, player, ante)
-  // Opening posts a bet above 0, so the opener is the current aggressor.
-  next = { ...next, currentBet: ante, aggressor: player, toAct: otherPlayer(player) }
-  return withLog(next, `${labelOf(player)} apre con ${ante}.`)
+function handleOpen(state: GameState, player: PlayerId, amount: number): GameState {
+  assert(inBettingPhase(state), 'OPEN only allowed in a betting phase')
+  assert(state.toAct === player, 'not this player to act')
+  assert(player === state.primary, 'only the primary opens a betting round')
+  assert(state.aggressor === null, 'the round is already opened')
+
+  const min = openMinimum(state)
+  assert(amount >= min, `opening bet must be at least ${min}`)
+
+  const hand = state.hands[player]
+  const toPut = amount - hand.committed
+  assert(toPut > 0, 'opening bet must add chips on top of what is already committed')
+
+  let next = commit(state, player, toPut)
+  next = { ...next, currentBet: amount, aggressor: player, toAct: otherPlayer(player) }
+  return withLog(next, `${labelOf(player)} punta ${amount}.`)
 }
 
 function handleCall(state: GameState, player: PlayerId, rng: Rng): GameState {
   assert(inBettingPhase(state), 'CALL only allowed in a betting phase')
   assert(state.toAct === player, 'not this player to act')
+  // There is no check: a player may only CALL to match an existing bet.
+  assert(state.aggressor !== null, 'nothing to call — the round has not been opened')
 
   const hand = state.hands[player]
   const toMatch = state.currentBet - hand.committed
   assert(toMatch >= 0, 'nothing to call implies negative match')
 
-  const isCheck = toMatch === 0 && state.aggressor === null
-  // No check in the first bet: the primary must post the ante (via OPEN) and the opponent
-  // must see/raise. Checking is only allowed in the second bet.
-  assert(
-    !(isCheck && state.phase === 'INITIAL_BET'),
-    'cannot check in the initial bet — you must bet',
+  const next = withLog(
+    toMatch > 0 ? commit(state, player, toMatch) : state,
+    `${labelOf(player)} vede (${toMatch}).`,
   )
-
-  let next = toMatch > 0 ? commit(state, player, toMatch) : state
-  next = withLog(
-    next,
-    isCheck ? `${labelOf(player)} passa.` : `${labelOf(player)} vede (${toMatch}).`,
-  )
-
-  if (isCheck) {
-    // A check: increment the check counter. Two consecutive checks close the window.
-    const checks = state.checksThisWindow + 1
-    next = { ...next, checksThisWindow: checks }
-    if (checks >= 2) {
-      return settleWindow(next, rng)
-    }
-    return { ...next, toAct: otherPlayer(player) }
-  }
-
-  // A call that matches the aggressor's bet closes the window.
+  // A call that matches the current bet closes the round.
   return settleWindow(next, rng)
 }
 
-function handleRaise(state: GameState, player: PlayerId): GameState {
+function handleRaise(state: GameState, player: PlayerId, amount: number): GameState {
   assert(inBettingPhase(state), 'RAISE only allowed in a betting phase')
   assert(state.toAct === player, 'not this player to act')
+  assert(state.aggressor !== null, 'cannot raise before the round is opened')
   assert(
     state.raisesThisWindow < state.config.maxRaisesPerWindow,
     'raise cap reached for this betting round',
   )
 
+  // Raise TO `amount`: must exceed the current bet by at least minBet.
+  const minRaiseTo = state.currentBet + state.config.minBet
+  assert(amount >= minRaiseTo, `raise must be to at least ${minRaiseTo}`)
+
   const hand = state.hands[player]
-  const newBet = state.currentBet + state.config.raiseStep
-  const toPut = newBet - hand.committed
+  const toPut = amount - hand.committed
   let next = commit(state, player, toPut)
   next = {
     ...next,
-    currentBet: newBet,
+    currentBet: amount,
     raisesThisWindow: next.raisesThisWindow + 1,
     aggressor: player, // the raiser is now the aggressor; opponent must respond
-    checksThisWindow: 0, // a bet cancels any prior checks
     toAct: otherPlayer(player),
   }
-  return withLog(next, `${labelOf(player)} rilancia a ${newBet}.`)
-}
-
-function handleFold(state: GameState, player: PlayerId): GameState {
-  assert(state.phase === 'SECOND_BET', 'FOLD only allowed in SECOND_BET')
-  assert(state.toAct === player, 'not this player to act')
-
-  const winner = otherPlayer(player)
-  const logged = withLog(state, `${labelOf(player)} lascia. ${labelOf(winner)} vince la mano.`)
-  return resolveHand(logged, { kind: 'win', winner, byFold: true })
+  return withLog(next, `${labelOf(player)} rilancia a ${amount}.`)
 }
 
 /**
- * The betting window has closed (a call matched a bet, or both players checked).
+ * The betting round has closed (a call matched the current bet).
  * Advances to the next phase. Both players are guaranteed matched at this point.
  */
 function settleWindow(state: GameState, rng: Rng): GameState {
@@ -349,7 +333,7 @@ function handleReroll(
     'reroll indices must be own-dice indices 0..3',
   )
   assert(unique.length <= MAX_REROLL, `at most ${MAX_REROLL} own dice may be rerolled`)
-  // "at least 1 own die stays" is implied by <= MAX_REROLL (=3) with 4 own dice.
+  // All 4 own dice may be rerolled; only the stolen die is fixed (and is not indexable here).
 
   let next = setHand(state, player, { rerollSelection: unique })
   next = withLog(
@@ -368,22 +352,25 @@ function handleReroll(
 }
 
 function enterSecondBet(state: GameState): GameState {
-  // Reset the betting window for the second bet. currentBet carries over the settled
-  // first bet amount as the floor (second bet must be >= first). committed values from
-  // the first window stay (they are already in the pot); the second window measures
-  // ADDITIONAL commitment on top, but we keep the model simple: currentBet resets to the
-  // first bet amount and committed already equals it, so a CALL with 0 to match = check.
-  return withLog(
-    {
-      ...state,
-      phase: 'SECOND_BET',
-      currentBet: state.firstBetAmount,
-      raisesThisWindow: 0,
-      aggressor: null, // fresh window: both players may check
-      checksThisWindow: 0,
-      toAct: state.primary,
+  // The second bet is a fresh betting round: the first-round chips are already in the pot
+  // and stay there, so we reset each player's per-round `committed` to 0 and start with no
+  // bet on the table. The primary must OPEN with an amount >= the first bet (openMinimum),
+  // then the opponent must see/raise (no check, no fold).
+  const reset: GameState = {
+    ...state,
+    phase: 'SECOND_BET',
+    currentBet: 0,
+    raisesThisWindow: 0,
+    aggressor: null,
+    toAct: state.primary,
+    hands: {
+      human: { ...state.hands.human, committed: 0 },
+      bot: { ...state.hands.bot, committed: 0 },
     },
-    `Seconda scommessa — apre ${labelOf(state.primary)} (minimo ${state.firstBetAmount}).`,
+  }
+  return withLog(
+    reset,
+    `Seconda scommessa — punta ${labelOf(state.primary)} (minimo ${state.firstBetAmount}).`,
   )
 }
 
@@ -417,7 +404,7 @@ function goToShowdown(state: GameState, rng: Rng): GameState {
   const outcome: HandOutcome =
     cmp === 0
       ? { kind: 'tie' }
-      : { kind: 'win', winner: cmp > 0 ? 'human' : 'bot', byFold: false }
+      : { kind: 'win', winner: cmp > 0 ? 'human' : 'bot' }
 
   const showdown: ShowdownInfo = { human: humanEval, bot: botEval, outcome }
 
@@ -457,12 +444,14 @@ function resolveHand(state: GameState, outcome: HandOutcome): GameState {
   let next = state
 
   if (outcome.kind === 'tie') {
-    // Refund each player's committed chips; pot goes to 0. No score change.
+    // Split the pot evenly. Because every hand reaches showdown with both players having
+    // matched each betting round, the pot is always even and splits cleanly. No score change.
+    const half = next.pot / 2
     next = {
       ...next,
       bankroll: {
-        human: next.bankroll.human + next.hands.human.committed,
-        bot: next.bankroll.bot + next.hands.bot.committed,
+        human: next.bankroll.human + half,
+        bot: next.bankroll.bot + half,
       },
       pot: 0,
     }
@@ -510,7 +499,6 @@ function handleNextHand(state: GameState): GameState {
     currentBet: 0,
     raisesThisWindow: 0,
     aggressor: null,
-    checksThisWindow: 0,
     toAct: state.primary,
     firstBetAmount: 0,
     lastShowdown: null,

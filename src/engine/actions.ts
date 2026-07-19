@@ -3,16 +3,26 @@
 
 import type { PlayerId } from './gameTypes'
 
-/** Betting actions, valid in INITIAL_BET and SECOND_BET (fold only in SECOND_BET). */
+/**
+ * Betting actions, valid in INITIAL_BET and SECOND_BET.
+ *
+ * Bet amounts are FREE (chosen by the player), subject to reducer-enforced minimums.
+ * There is no fold and no check: to stay in a hand a player must always match or exceed
+ * the current bet.
+ */
 export type BetAction =
-  /** Match the current bet (or, when currentBet==committed, this is a "check"). */
+  /** Match the current bet exactly (stay in without raising). */
   | { readonly type: 'CALL'; readonly player: PlayerId }
-  /** Raise by config.raiseStep (subject to maxRaisesPerWindow). */
-  | { readonly type: 'RAISE'; readonly player: PlayerId }
-  /** In INITIAL_BET only: primary posts the opening ante. */
-  | { readonly type: 'OPEN'; readonly player: PlayerId }
-  /** Fold — legal ONLY in SECOND_BET. Opponent wins the hand. */
-  | { readonly type: 'FOLD'; readonly player: PlayerId }
+  /**
+   * Raise the current bet TO `amount` (must be strictly greater than the current bet).
+   * The player commits the difference between `amount` and what they already put in.
+   */
+  | { readonly type: 'RAISE'; readonly player: PlayerId; readonly amount: number }
+  /**
+   * Open the betting (INITIAL_BET only) by posting `amount` (>= config.minBet). The
+   * primary chooses how much to bet.
+   */
+  | { readonly type: 'OPEN'; readonly player: PlayerId; readonly amount: number }
 
 /** Steal a common die by index (0..2), valid in STEAL. */
 export interface StealAction {
@@ -24,7 +34,7 @@ export interface StealAction {
 /**
  * Commit a reroll selection, valid in REROLL_SELECT.
  * `ownIndices` are indices (0..3) of the player's OWN dice to reroll.
- * The reducer enforces: at most 3 selected (>=1 kept). The stolen die is never rerollable.
+ * All 4 own dice may be rerolled; only the stolen die is fixed.
  */
 export interface RerollAction {
   readonly type: 'REROLL'

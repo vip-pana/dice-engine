@@ -6,11 +6,11 @@ import type { Rng } from './rng'
  * Shared reroll heuristic, used by both the Monte Carlo simulator (Step 3) and the
  * bot (Step 5). Kept pure and portable: it only reads dice values and an injected Rng.
  *
- * Constraints enforced by the rules (see SPEC):
- *  - Only the 4 OWN dice may be rerolled; the stolen die is fixed.
- *  - At most MAX_REROLL own dice may be rerolled (so at least 1 own die stays).
+ * Constraints enforced by the rules:
+ *  - Only the 4 OWN dice may be rerolled; the stolen die is always fixed.
+ *  - Up to MAX_REROLL (all 4) own dice may be rerolled.
  */
-export const MAX_REROLL = 3
+export const MAX_REROLL = 4
 
 /** The 4 own dice of a player, before the stolen die is added. */
 export type OwnDice = readonly [Die, Die, Die, Die]

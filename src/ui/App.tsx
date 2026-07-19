@@ -223,28 +223,24 @@ function CommonRow({
 
 function BotRow({ state }: { state: GameState }): JSX.Element {
   const hand = state.hands.bot
-  const reveal = state.phase === 'SHOWDOWN' || state.phase === 'HAND_COMPLETE' || state.phase === 'MATCH_OVER'
+  // Bot dice are always visible (open information).
+  const live = liveFinalHand(hand) // reuse: own4 + stolen -> Hand, if formed
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
       {hand.own === null ? (
-        <Placeholder text="In attesa" />
-      ) : reveal ? (
+        <Placeholder text="In attesa del lancio" />
+      ) : (
         <>
           {hand.own.map((die, i) => (
             <DieView key={i} value={die.value} />
           ))}
-          {hand.stolen && <DieView value={hand.stolen.value} caption="rubato" />}
+          {hand.stolen ? (
+            <DieView value={hand.stolen.value} caption="rubato" />
+          ) : (
+            <Placeholder text="dado rubato" />
+          )}
+          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live />}
         </>
-      ) : (
-        <>
-          {hand.own.map((_, i) => (
-            <HiddenDie key={i} />
-          ))}
-          {hand.stolen && <DieView value={hand.stolen.value} caption="rubato" />}
-        </>
-      )}
-      {reveal && state.lastShowdown && (
-        <HandBadge label={categoryLabel(state.lastShowdown.bot)} />
       )}
     </div>
   )
@@ -273,12 +269,11 @@ function HumanRow({
   const toggle = (i: number): void => {
     setSelected((cur) => {
       if (cur.includes(i)) return cur.filter((x) => x !== i)
-      if (cur.length >= 3) return cur // max 3 reroll (engine also enforces this)
-      return [...cur, i]
+      return [...cur, i] // all 4 own dice may be rerolled; only the stolen die is fixed
     })
   }
 
-  const liveHand: Hand | null = liveHumanHand(hand)
+  const liveHand: Hand | null = liveFinalHand(hand)
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -302,7 +297,7 @@ function HumanRow({
       {selecting && (
         <div style={{ marginTop: 10 }}>
           <span style={{ fontSize: 13, color: '#94a3b8' }}>
-            Selezionati da rilanciare: {selected.length} / 3 (almeno 1 dado resta fermo)
+            Selezionati da rilanciare: {selected.length} / 4 (il dado rubato resta fisso)
           </span>
           <div style={{ marginTop: 6 }}>
             <PrimaryButton
@@ -316,27 +311,6 @@ function HumanRow({
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-function HiddenDie(): JSX.Element {
-  return (
-    <div
-      style={{
-        width: 52,
-        height: 52,
-        borderRadius: 10,
-        border: '2px dashed #475569',
-        background: '#1e293b',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#64748b',
-        fontSize: 22,
-      }}
-    >
-      ?
     </div>
   )
 }
@@ -419,52 +393,9 @@ function Controls({
     )
   }
 
-  // Human's turn: render buttons for the current phase.
-  const canRaise = state.raisesThisWindow < state.config.maxRaisesPerWindow
-
-  if (state.phase === 'INITIAL_BET') {
-    if (state.primary === 'human' && state.currentBet === 0) {
-      return (
-        <div style={rowStyle}>
-          <PrimaryButton onClick={() => dispatch({ type: 'OPEN', player: 'human' })}>
-            Punta {state.config.ante} monete
-          </PrimaryButton>
-        </div>
-      )
-    }
-    const owed = state.currentBet - state.hands.human.committed
-    return (
-      <div style={rowStyle}>
-        <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
-          Vedi (paga {owed} monete)
-        </PrimaryButton>
-        {canRaise && (
-          <SecondaryButton onClick={() => dispatch({ type: 'RAISE', player: 'human' })}>
-            Rilancia (+{state.config.raiseStep} monete)
-          </SecondaryButton>
-        )}
-      </div>
-    )
-  }
-
-  if (state.phase === 'SECOND_BET') {
-    const owed = state.currentBet - state.hands.human.committed
-    const facingBet = owed > 0 || state.aggressor === 'bot'
-    return (
-      <div style={rowStyle}>
-        <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
-          {facingBet ? `Vedi (paga ${owed} monete)` : 'Passa (nessuna puntata)'}
-        </PrimaryButton>
-        {canRaise && (
-          <SecondaryButton onClick={() => dispatch({ type: 'RAISE', player: 'human' })}>
-            {facingBet ? 'Rilancia' : 'Punta'} (+{state.config.raiseStep} monete)
-          </SecondaryButton>
-        )}
-        <DangerButton onClick={() => dispatch({ type: 'FOLD', player: 'human' })}>
-          Lascia (rinuncia alla mano)
-        </DangerButton>
-      </div>
-    )
+  // Human's turn in a betting phase: free-amount open / call / raise. No fold, no check.
+  if (state.phase === 'INITIAL_BET' || state.phase === 'SECOND_BET') {
+    return <BettingControls state={state} dispatch={dispatch} />
   }
 
   // STEAL / REROLL_SELECT are driven inline on the dice; nudge the player.
@@ -472,13 +403,98 @@ function Controls({
     return <Hint text="Clicca un dado comune per rubarlo." />
   }
   if (state.phase === 'REROLL_SELECT') {
-    return <Hint text="Seleziona i dadi da rilanciare (max 3), poi conferma." />
+    return <Hint text="Seleziona i dadi da rilanciare (puoi rilanciarli tutti tranne il rubato), poi conferma." />
   }
   return <span />
 }
 
 function Hint({ text }: { text: string }): JSX.Element {
   return <p style={{ color: '#fbbf24', fontSize: 14, marginTop: 16 }}>{text}</p>
+}
+
+/**
+ * Free-amount betting controls for the human. No fold, no check:
+ *  - If the round is not opened yet (human is primary), they must OPEN with an amount
+ *    >= the phase minimum.
+ *  - If facing a bet, they may CALL (match) or RAISE to a higher amount.
+ * The amount field is bounded to the player's bankroll.
+ */
+function BettingControls({
+  state,
+  dispatch,
+}: {
+  state: GameState
+  dispatch: UseGameDispatch
+}): JSX.Element {
+  const isOpening = state.aggressor === null // human is the primary opening this round
+  const phaseMin = state.phase === 'SECOND_BET' ? state.firstBetAmount : state.config.minBet
+  const minAmount = isOpening ? phaseMin : state.currentBet + state.config.minBet
+  const maxAmount = state.bankroll.human + state.hands.human.committed
+  const canRaise =
+    !isOpening &&
+    state.raisesThisWindow < state.config.maxRaisesPerWindow &&
+    maxAmount >= minAmount
+
+  const [amount, setAmount] = useState<number>(minAmount)
+
+  // Keep the amount within [minAmount, maxAmount] as context changes.
+  useEffect(() => {
+    setAmount((a) => Math.max(minAmount, Math.min(maxAmount, a)))
+  }, [minAmount, maxAmount])
+
+  const owed = state.currentBet - state.hands.human.committed
+  const rowStyle = { display: 'flex', gap: 10, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' as const }
+
+  return (
+    <div style={rowStyle}>
+      {!isOpening && (
+        <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
+          Vedi (paga {owed} monete)
+        </PrimaryButton>
+      )}
+
+      {(isOpening || canRaise) && (
+        <>
+          <label style={{ fontSize: 13, color: '#94a3b8' }}>
+            {isOpening ? 'Punta' : 'Rilancia a'}:
+            <input
+              type="number"
+              min={minAmount}
+              max={maxAmount}
+              step={state.config.minBet}
+              value={amount}
+              onChange={(e) => setAmount(Number(e.target.value))}
+              style={{
+                width: 90,
+                marginLeft: 8,
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: '1px solid #334155',
+                background: '#0b1220',
+                color: '#e2e8f0',
+                fontSize: 15,
+              }}
+            />
+          </label>
+          <PrimaryButton
+            onClick={() =>
+              dispatch(
+                isOpening
+                  ? { type: 'OPEN', player: 'human', amount }
+                  : { type: 'RAISE', player: 'human', amount },
+              )
+            }
+          >
+            {isOpening ? `Punta ${amount} monete` : `Rilancia a ${amount}`}
+          </PrimaryButton>
+        </>
+      )}
+
+      <span style={{ fontSize: 12, color: '#64748b' }}>
+        (min {minAmount}, max {maxAmount} monete)
+      </span>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -533,29 +549,13 @@ function PrimaryButton({ onClick, children }: ButtonProps): JSX.Element {
   )
 }
 
-function SecondaryButton({ onClick, children }: ButtonProps): JSX.Element {
-  return (
-    <button type="button" onClick={onClick} style={{ ...baseButton, background: '#475569', color: 'white' }}>
-      {children}
-    </button>
-  )
-}
-
-function DangerButton({ onClick, children }: ButtonProps): JSX.Element {
-  return (
-    <button type="button" onClick={onClick} style={{ ...baseButton, background: '#b91c1c', color: 'white' }}>
-      {children}
-    </button>
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Local helpers (presentation only)
 // ---------------------------------------------------------------------------
 
 type UseGameDispatch = ReturnType<typeof useGame>['dispatch']
 
-function liveHumanHand(hand: PlayerHandState): Hand | null {
+function liveFinalHand(hand: PlayerHandState): Hand | null {
   if (hand.own === null || hand.stolen === null) return null
   return [hand.own[0], hand.own[1], hand.own[2], hand.own[3], hand.stolen]
 }

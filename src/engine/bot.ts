@@ -9,7 +9,7 @@ import { chooseStolenDie, chooseRerollIndices, handScore } from './strategy'
 import type { Rng } from './rng'
 import type { Hand } from './types'
 import type { Action } from './actions'
-import { otherPlayer, type GameState, type PlayerId } from './gameTypes'
+import type { GameState, PlayerId } from './gameTypes'
 
 /**
  * Tunable bot parameters. These are intentionally simple and named so they can be
@@ -17,15 +17,13 @@ import { otherPlayer, type GameState, type PlayerId } from './gameTypes'
  */
 export const BOT_TUNING = {
   /**
-   * Second-bet strength gates, expressed as a normalized hand strength in [0, 1]
-   * (see normalizedStrength). Below `foldBelow` the bot folds to a bet; at/above
-   * `raiseAtLeast` it will raise; in between it just calls/checks.
+   * Second-bet strength gate: at/above this normalized hand strength ([0,1]) the bot
+   * raises; below it, the bot just calls. There is no fold — the bot always sees the bet.
    */
-  foldBelow: 0.28,
   raiseAtLeast: 0.62,
   /**
-   * Initial bet is blind (before dice are rolled), so the bot plays it flat: it always
-   * calls the opening ante and never raises pre-roll. Kept as a flag for clarity.
+   * Initial bet is blind (before dice are rolled), so the bot plays it flat: it opens /
+   * calls at the minimum and never raises pre-roll. Kept as a flag for clarity.
    */
   raiseOnInitialBet: false,
 } as const
@@ -90,12 +88,12 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
 // --- INITIAL_BET (blind) ---
 
 function chooseInitialBet(state: GameState, player: PlayerId): Action {
-  // Primary must open; non-primary responds. Blind, so keep it flat.
-  if (player === state.primary && state.currentBet === 0) {
-    return { type: 'OPEN', player }
+  // Primary opens at the minimum; non-primary calls. Blind, so keep it flat.
+  if (player === state.primary && state.aggressor === null) {
+    return { type: 'OPEN', player, amount: state.config.minBet }
   }
   if (BOT_TUNING.raiseOnInitialBet && state.raisesThisWindow < state.config.maxRaisesPerWindow) {
-    return { type: 'RAISE', player }
+    return { type: 'RAISE', player, amount: state.currentBet + state.config.minBet }
   }
   return { type: 'CALL', player }
 }
@@ -135,30 +133,20 @@ function chooseSecondBet(state: GameState, player: PlayerId): Action {
     throw new Error('[bot] second bet requested before hand is formed')
   }
   const strength = normalizedStrength(hand)
+  const canRaise = state.raisesThisWindow < state.config.maxRaisesPerWindow
+  const wantsRaise = strength >= BOT_TUNING.raiseAtLeast && canRaise
 
-  // Is there an outstanding bet the bot must answer (someone raised above the floor)?
-  const owed = state.currentBet - state.hands[player].committed
-  const facingBet = owed > 0 || state.aggressor === otherPlayer(player)
-
-  if (facingBet) {
-    if (strength < BOT_TUNING.foldBelow) {
-      return { type: 'FOLD', player }
-    }
-    if (
-      strength >= BOT_TUNING.raiseAtLeast &&
-      state.raisesThisWindow < state.config.maxRaisesPerWindow
-    ) {
-      return { type: 'RAISE', player }
-    }
-    return { type: 'CALL', player } // see the bet
+  // No bet on the table yet: the bot (as primary) MUST open (no check). It opens at the
+  // minimum, or higher when its hand is strong.
+  if (state.aggressor === null) {
+    const min = state.firstBetAmount // second-bet minimum
+    const amount = wantsRaise ? min + state.config.minBet : min
+    return { type: 'OPEN', player, amount }
   }
 
-  // No bet to answer: the bot may check or open a bet.
-  if (
-    strength >= BOT_TUNING.raiseAtLeast &&
-    state.raisesThisWindow < state.config.maxRaisesPerWindow
-  ) {
-    return { type: 'RAISE', player } // bet for value
+  // Facing a bet: raise when strong (no fold — the bot always at least sees the bet).
+  if (wantsRaise) {
+    return { type: 'RAISE', player, amount: state.currentBet + state.config.minBet }
   }
-  return { type: 'CALL', player } // check
+  return { type: 'CALL', player }
 }

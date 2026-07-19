@@ -18,10 +18,10 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * these; only actions valid for the current phase are accepted.
  *
  *  ROLL_OFF      -> both players roll one die; highest becomes primary (tie -> re-roll)
- *  INITIAL_BET   -> primary MUST bet the ante (no check, no fold); opponent see/raise
+ *  INITIAL_BET   -> primary opens with a free amount; opponent must see/raise (no fold)
  *  STEAL         -> primary steals a common die first, then non-primary (exclusive)
- *  REROLL_SELECT -> each player picks which own dice to reroll (max 3, >=1 kept)
- *  SECOND_BET    -> primary check/bet; opponent see/raise/FOLD (only fold window)
+ *  REROLL_SELECT -> each player picks which own dice to reroll (up to 4; stolen fixed)
+ *  SECOND_BET    -> primary bets >= first bet; opponent see/raise (no check, no fold)
  *  SHOWDOWN      -> hands compared, pot awarded (or split + replay on total tie)
  *  HAND_COMPLETE -> result recorded; ready to start next hand or end the match
  *  MATCH_OVER    -> Best of 3 decided
@@ -39,21 +39,18 @@ export type Phase =
   | 'HAND_COMPLETE'
   | 'MATCH_OVER'
 
-/** Fixed, simplified betting configuration (see SPEC: "puntata fissa a step"). */
+/** Betting configuration. Amounts are player-chosen (free), bounded by these limits. */
 export interface BetConfig {
-  /** Opening stake the primary player posts, and each player must match to stay in. */
-  readonly ante: number
-  /** Fixed increment added by each raise. */
-  readonly raiseStep: number
-  /** Max number of raises allowed within a single betting window. */
+  /** Minimum opening bet, and the minimum increment of any raise. */
+  readonly minBet: number
+  /** Max number of raises allowed within a single betting round (caps raise wars). */
   readonly maxRaisesPerWindow: number
 }
 
 /** Default betting configuration. Tunable in one place. */
 export const DEFAULT_BET_CONFIG: BetConfig = {
-  ante: 10,
-  raiseStep: 10,
-  maxRaisesPerWindow: 2,
+  minBet: 10,
+  maxRaisesPerWindow: 4,
 }
 
 /** Starting bankroll for each player. */
@@ -77,9 +74,9 @@ export interface PlayerHandState {
   readonly rerollSelection: readonly number[] | null
 }
 
-/** Outcome of a completed hand. */
+/** Outcome of a completed hand. Every hand goes to showdown (there is no fold). */
 export type HandOutcome =
-  | { readonly kind: 'win'; readonly winner: PlayerId; readonly byFold: boolean }
+  | { readonly kind: 'win'; readonly winner: PlayerId }
   | { readonly kind: 'tie' } // total tie: pot split, hand replayed, no score change
 
 /** Snapshot of a finished showdown, kept for the UI/log. */
@@ -134,13 +131,10 @@ export interface GameState {
   readonly currentBet: number
   readonly raisesThisWindow: number
   /**
-   * The player who made the last aggressive move (open/raise) in the current window,
-   * or null if no one has bet yet (both still able to check). A CALL that matches an
-   * aggressor's bet closes the window; two consecutive checks also close it.
+   * The player who opened the current betting round (open/raise), or null before the
+   * round is opened. A CALL that matches the aggressor's bet closes the round.
    */
   readonly aggressor: PlayerId | null
-  /** Consecutive checks in the current window (used to detect check-check). */
-  readonly checksThisWindow: number
   /** Whose turn it is to act in the current betting/steal/reroll phase. */
   readonly toAct: PlayerId
 

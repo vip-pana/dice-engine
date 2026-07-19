@@ -53,23 +53,9 @@ describe('bot plays only legal actions', () => {
 })
 
 describe('bot betting heuristics', () => {
-  it('never folds during the initial bet (folds only exist in SECOND_BET)', () => {
-    // Drive one hand and assert no FOLD is ever chosen before SECOND_BET.
-    const rng = createRng(3)
-    let s = createInitialState({ firstPrimary: 'bot' })
-    let guard = 0
-    while (s.phase !== 'SECOND_BET' && s.phase !== 'HAND_COMPLETE' && guard < 50) {
-      const action = chooseAction(s, s.toAct, rng)
-      expect(action.type).not.toBe('FOLD')
-      s = reducer(s, action, rng)
-      guard++
-    }
-    expect(guard).toBeLessThan(50)
-  })
-
-  it('conserves chips: bankrolls + pot stay constant during a hand', () => {
+  it('conserves chips: bankrolls + pot stay constant during a match', () => {
     const rng = createRng(9)
-    let s = createInitialState({ firstPrimary: 'bot' })
+    let s = createInitialState()
     const total = () => s.bankroll.human + s.bankroll.bot + s.pot
     const start = DEFAULT_STARTING_BANKROLL * 2
     let guard = 0
@@ -85,9 +71,8 @@ describe('bot betting heuristics', () => {
     expect(total()).toBe(start)
   })
 
-  it('exposes tunable thresholds ordered sensibly', () => {
-    expect(BOT_TUNING.foldBelow).toBeLessThan(BOT_TUNING.raiseAtLeast)
-    expect(BOT_TUNING.foldBelow).toBeGreaterThanOrEqual(0)
+  it('exposes a tunable raise threshold in [0,1]', () => {
+    expect(BOT_TUNING.raiseAtLeast).toBeGreaterThanOrEqual(0)
     expect(BOT_TUNING.raiseAtLeast).toBeLessThanOrEqual(1)
   })
 })

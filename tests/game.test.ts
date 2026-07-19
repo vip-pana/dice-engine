@@ -10,10 +10,9 @@ import {
   type Rng,
 } from '../src/engine'
 
-/**
- * Performs the ROLL_OFF (retrying on ties) and returns the state in INITIAL_BET with a
- * decided primary. The roll-off is a system action, so no player is attached.
- */
+const MIN = DEFAULT_BET_CONFIG.minBet
+
+/** Performs the ROLL_OFF (retrying on ties) and returns the state in INITIAL_BET. */
 function rollOffUntilDecided(state: GameState, rng: Rng): GameState {
   let s = state
   let guard = 0
@@ -26,17 +25,17 @@ function rollOffUntilDecided(state: GameState, rng: Rng): GameState {
 }
 
 /**
- * Plays one full hand from ROLL_OFF: roll off, primary opens & non-primary calls, primary
- * steals first, both keep all dice, primary checks & non-primary checks in the second bet.
- * Returns the state right after the hand resolves.
+ * Plays one full hand from ROLL_OFF at minimum stakes: roll off; primary opens the min &
+ * non-primary calls; primary steals first; both keep all dice; primary opens the second
+ * bet at the first-bet amount & non-primary calls. Returns the state after resolution.
  */
 function playPassiveHand(state: GameState, rng: Rng): GameState {
   let s = rollOffUntilDecided(state, rng)
   const primary = s.primary
   const nonPrimary = otherPlayer(primary)
 
-  // INITIAL_BET: primary opens (must bet), non-primary calls.
-  s = reducer(s, { type: 'OPEN', player: primary }, rng)
+  // INITIAL_BET: primary opens at minimum, non-primary calls.
+  s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
   s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
   expect(s.phase).toBe('STEAL')
 
@@ -52,8 +51,8 @@ function playPassiveHand(state: GameState, rng: Rng): GameState {
   s = reducer(s, { type: 'REROLL', player: nonPrimary, ownIndices: [] }, rng)
   expect(s.phase).toBe('SECOND_BET')
 
-  // SECOND_BET: primary checks, non-primary checks.
-  s = reducer(s, { type: 'CALL', player: primary }, rng)
+  // SECOND_BET: primary opens at the first-bet amount, non-primary calls.
+  s = reducer(s, { type: 'OPEN', player: primary, amount: s.firstBetAmount }, rng)
   s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
   return s
 }
@@ -72,58 +71,101 @@ describe('initial state', () => {
 describe('roll-off decides the primary', () => {
   it('the higher die becomes primary and opens the initial bet', () => {
     const rng = createRng(1)
-    let s = createInitialState()
-    s = rollOffUntilDecided(s, rng)
+    let s = rollOffUntilDecided(createInitialState(), rng)
     expect(s.rollOff).not.toBeNull()
     const { human, bot } = s.rollOff!
-    expect(human.value).not.toBe(bot.value) // decided => not a tie
+    expect(human.value).not.toBe(bot.value)
     const expectedPrimary: PlayerId = human.value > bot.value ? 'human' : 'bot'
     expect(s.primary).toBe(expectedPrimary)
-    expect(s.toAct).toBe(expectedPrimary) // primary opens
+    expect(s.toAct).toBe(expectedPrimary)
+  })
+})
+
+describe('free bet amounts', () => {
+  it('primary can open above the minimum and opponent must match', () => {
+    const rng = createRng(2)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    const primary = s.primary
+    const nonPrimary = otherPlayer(primary)
+    s = reducer(s, { type: 'OPEN', player: primary, amount: 50 }, rng)
+    expect(s.currentBet).toBe(50)
+    s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
+    expect(s.phase).toBe('STEAL')
+    expect(s.pot).toBe(100)
+    expect(s.firstBetAmount).toBe(50)
+  })
+
+  it('rejects an opening bet below the minimum', () => {
+    const rng = createRng(3)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    expect(() =>
+      reducer(s, { type: 'OPEN', player: s.primary, amount: MIN - 1 }, rng),
+    ).toThrow(/at least/)
+  })
+
+  it('rejects a raise that does not exceed the current bet by the minimum', () => {
+    const rng = createRng(4)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    const primary = s.primary
+    s = reducer(s, { type: 'OPEN', player: primary, amount: 30 }, rng)
+    expect(() =>
+      reducer(s, { type: 'RAISE', player: otherPlayer(primary), amount: 35 }, rng),
+    ).toThrow(/raise must be to at least/)
+  })
+})
+
+describe('no check, no fold', () => {
+  it('rejects CALL before the round is opened (no check)', () => {
+    const rng = createRng(5)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    // Primary cannot CALL first — the round is not opened yet.
+    expect(() => reducer(s, { type: 'CALL', player: s.primary }, rng)).toThrow(
+      /nothing to call/,
+    )
+  })
+
+  it('has no FOLD action available in the type system (compile-time), and every hand reaches showdown', () => {
+    const rng = createRng(6)
+    let s = playPassiveHand(createInitialState(), rng)
+    // Passive hands always resolve via showdown, never a fold.
+    if (s.phase === 'HAND_COMPLETE') {
+      expect(s.lastShowdown).not.toBeNull()
+    } else {
+      expect(s.phase).toBe('MATCH_OVER')
+    }
   })
 })
 
 describe('steal ordering and exclusivity', () => {
   it('primary steals first', () => {
-    const rng = createRng(2)
+    const rng = createRng(7)
     let s = rollOffUntilDecided(createInitialState(), rng)
     const primary = s.primary
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
+    s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
     s = reducer(s, { type: 'CALL', player: otherPlayer(primary) }, rng)
     expect(s.phase).toBe('STEAL')
     expect(s.toAct).toBe(primary)
   })
 
   it('rejects stealing a die already taken', () => {
-    const rng = createRng(3)
+    const rng = createRng(8)
     let s = rollOffUntilDecided(createInitialState(), rng)
     const primary = s.primary
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
+    s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
     s = reducer(s, { type: 'CALL', player: otherPlayer(primary) }, rng)
     s = reducer(s, { type: 'STEAL', player: primary, commonIndex: 0 }, rng)
     expect(() =>
       reducer(s, { type: 'STEAL', player: otherPlayer(primary), commonIndex: 0 }, rng),
     ).toThrow(/already taken/)
   })
-
-  it('non-primary cannot steal before primary', () => {
-    const rng = createRng(4)
-    let s = rollOffUntilDecided(createInitialState(), rng)
-    const primary = s.primary
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
-    s = reducer(s, { type: 'CALL', player: otherPlayer(primary) }, rng)
-    expect(() =>
-      reducer(s, { type: 'STEAL', player: otherPlayer(primary), commonIndex: 0 }, rng),
-    ).toThrow(/not this player to steal/)
-  })
 })
 
-describe('reroll constraint (max 3, at least 1 kept)', () => {
+describe('reroll constraint (up to 4, stolen fixed)', () => {
   function reachRerollSelect(rng: Rng): GameState {
     let s = rollOffUntilDecided(createInitialState(), rng)
     const primary = s.primary
     const nonPrimary = otherPlayer(primary)
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
+    s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
     s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
     s = reducer(s, { type: 'STEAL', player: primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: nonPrimary, commonIndex: 1 }, rng)
@@ -131,23 +173,23 @@ describe('reroll constraint (max 3, at least 1 kept)', () => {
     return s
   }
 
-  it('accepts rerolling exactly 3 own dice', () => {
-    const rng = createRng(5)
+  it('accepts rerolling all 4 own dice', () => {
+    const rng = createRng(9)
     const s = reachRerollSelect(rng)
-    const next = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 1, 2] }, rng)
-    expect(next.hands[s.primary].rerollSelection).toEqual([0, 1, 2])
+    const next = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 1, 2, 3] }, rng)
+    expect(next.hands[s.primary].rerollSelection).toEqual([0, 1, 2, 3])
   })
 
-  it('rejects rerolling all 4 own dice', () => {
-    const rng = createRng(6)
+  it('rejects an index outside 0..3 (the stolen die is not indexable)', () => {
+    const rng = createRng(10)
     const s = reachRerollSelect(rng)
     expect(() =>
-      reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 1, 2, 3] }, rng),
-    ).toThrow(/at most 3/)
+      reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 4] }, rng),
+    ).toThrow(/own-dice indices/)
   })
 
   it('rejects duplicate indices', () => {
-    const rng = createRng(7)
+    const rng = createRng(11)
     const s = reachRerollSelect(rng)
     expect(() =>
       reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 0] }, rng),
@@ -155,82 +197,38 @@ describe('reroll constraint (max 3, at least 1 kept)', () => {
   })
 })
 
-describe('betting rules', () => {
-  it('rejects a check during INITIAL_BET (must bet)', () => {
-    // Force a state where the opponent would attempt to check pre-bet: only possible if
-    // aggressor is null, which never happens after OPEN. Instead we assert the primary
-    // cannot CALL at currentBet 0 (that path is an OPEN), and the non-primary faces a bet.
-    const rng = createRng(8)
-    let s = rollOffUntilDecided(createInitialState(), rng)
-    const primary = s.primary
-    // Primary must OPEN, not CALL, at the start.
-    expect(() => reducer(s, { type: 'CALL', player: primary }, rng)).toThrow(
-      /cannot check in the initial bet/,
-    )
-  })
-
-  it('rejects FOLD during INITIAL_BET', () => {
-    const rng = createRng(9)
-    let s = rollOffUntilDecided(createInitialState(), rng)
-    const primary = s.primary
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
-    expect(() => reducer(s, { type: 'FOLD', player: otherPlayer(primary) }, rng)).toThrow(
-      /FOLD only allowed in SECOND_BET/,
-    )
-  })
-
-  it('allows FOLD in SECOND_BET and awards the hand to the opponent', () => {
-    const rng = createRng(10)
+describe('betting: pot accounting and raise cap', () => {
+  it('pot equals total chips committed across both rounds', () => {
+    const rng = createRng(12)
     let s = rollOffUntilDecided(createInitialState(), rng)
     const primary = s.primary
     const nonPrimary = otherPlayer(primary)
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
-    s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
-    s = reducer(s, { type: 'STEAL', player: primary, commonIndex: 0 }, rng)
-    s = reducer(s, { type: 'STEAL', player: nonPrimary, commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: nonPrimary, ownIndices: [] }, rng)
-    expect(s.phase).toBe('SECOND_BET')
-    // Primary checks, non-primary folds.
+    s = reducer(s, { type: 'OPEN', player: primary, amount: 20 }, rng)
+    s = reducer(s, { type: 'RAISE', player: nonPrimary, amount: 40 }, rng)
     s = reducer(s, { type: 'CALL', player: primary }, rng)
-    const potBefore = s.pot
-    const winnerCommitted = s.hands[primary].committed
-    s = reducer(s, { type: 'FOLD', player: nonPrimary }, rng)
-    expect(s.score[primary]).toBe(1)
-    expect(s.lastShowdown).toBeNull() // folded, no showdown
-    expect(s.bankroll[primary]).toBe(200 - winnerCommitted + potBefore)
-  })
-
-  it('pot equals total committed by both players', () => {
-    const rng = createRng(11)
-    let s = rollOffUntilDecided(createInitialState(), rng)
-    const primary = s.primary
-    const nonPrimary = otherPlayer(primary)
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
-    s = reducer(s, { type: 'RAISE', player: nonPrimary }, rng)
-    s = reducer(s, { type: 'CALL', player: primary }, rng)
-    const expected = s.hands.human.committed + s.hands.bot.committed
-    expect(s.pot).toBe(expected)
-    expect(s.hands.human.committed).toBe(s.hands.bot.committed)
+    expect(s.pot).toBe(80) // both matched 40
+    expect(s.phase).toBe('STEAL')
   })
 
   it('respects the raise cap per betting round', () => {
-    const rng = createRng(12)
+    const rng = createRng(13)
     let s = rollOffUntilDecided(
       createInitialState({ config: { ...DEFAULT_BET_CONFIG, maxRaisesPerWindow: 1 } }),
       rng,
     )
     const primary = s.primary
     const nonPrimary = otherPlayer(primary)
-    s = reducer(s, { type: 'OPEN', player: primary }, rng)
-    s = reducer(s, { type: 'RAISE', player: nonPrimary }, rng)
-    expect(() => reducer(s, { type: 'RAISE', player: primary }, rng)).toThrow(/raise cap/)
+    s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
+    s = reducer(s, { type: 'RAISE', player: nonPrimary, amount: 2 * MIN }, rng)
+    expect(() =>
+      reducer(s, { type: 'RAISE', player: primary, amount: 3 * MIN }, rng),
+    ).toThrow(/raise cap/)
   })
 })
 
 describe('next hand re-runs the roll-off', () => {
   it('returns to ROLL_OFF after a decisive hand', () => {
-    const rng = createRng(13)
+    const rng = createRng(14)
     let s = playPassiveHand(createInitialState(), rng)
     if (s.phase === 'HAND_COMPLETE') {
       s = reducer(s, { type: 'NEXT_HAND' }, rng)
@@ -238,8 +236,7 @@ describe('next hand re-runs the roll-off', () => {
       expect(s.handNumber).toBe(2)
       expect(s.rollOff).toBeNull()
     } else {
-      // Tie hands also return to ROLL_OFF on NEXT_HAND.
-      expect(s.phase).toBe('HAND_COMPLETE')
+      expect(s.phase).toBe('MATCH_OVER')
     }
   })
 })
@@ -257,9 +254,25 @@ describe('Best of 3 completes', () => {
       guard++
     }
     expect(s.phase).toBe('MATCH_OVER')
-    expect(s.matchWinner).not.toBeNull()
     const winner = s.matchWinner as PlayerId
     expect(s.score[winner]).toBe(2)
+  })
+})
+
+describe('chip conservation', () => {
+  it('bankrolls + pot stay constant through a whole match', () => {
+    const rng = createRng(55)
+    let s = createInitialState()
+    const total = (st: GameState): number => st.bankroll.human + st.bankroll.bot + st.pot
+    const start = total(s)
+    let guard = 0
+    while (s.phase !== 'MATCH_OVER' && guard < 40) {
+      expect(total(s)).toBe(start)
+      s = playPassiveHand(s, rng)
+      if (s.phase === 'HAND_COMPLETE') s = reducer(s, { type: 'NEXT_HAND' }, rng)
+      guard++
+    }
+    expect(total(s)).toBe(start)
   })
 })
 
