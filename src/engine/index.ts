@@ -6,3 +6,4 @@
 export * from './types'
 export * from './rng'
 export * from './hand'
+export * from './strategy'

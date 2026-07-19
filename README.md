@@ -27,3 +27,14 @@ npm test           # test unitari (Vitest)
 npm run typecheck  # type-check TypeScript strict
 npm run sim        # simulatore Monte Carlo (tsx)
 ```
+
+Il simulatore accetta due variabili d'ambiente opzionali:
+
+```bash
+SIM_TRIALS=200000 SIM_SEED=42 pnpm sim
+```
+
+Stampa la distribuzione delle categorie prodotta dalla strategia condivisa
+(furto greedy + reroll euristico con vincolo max 3), da confrontare con i target
+del GDD (Full house ~16,5%, scale ~6% ciascuna). Divergenze sono materiale di
+bilanciamento: la strategia euristica è tarabile, non è un bug delle regole.
