@@ -3,6 +3,11 @@
 Prototipo giocabile di un poker di dadi 1v1 a turni (Best of 3) contro un bot.
 Serve a validare se il loop di gioco è divertente.
 
+**Demo live:** https://vip-pana.github.io/dice-engine/ (deploy automatico via GitHub
+Actions a ogni push su `main`).
+
+**Report probabilità:** [docs/montecarlo-report.md](docs/montecarlo-report.md).
+
 ## Architettura
 
 Barriera netta tra due livelli:
