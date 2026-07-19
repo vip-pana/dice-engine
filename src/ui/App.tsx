@@ -34,6 +34,7 @@ export function App(): JSX.Element {
       <ScoreBar state={state} />
       <BotAutoPlayer state={state} dispatch={dispatch} />
       <Table state={state} dispatch={dispatch} />
+      <OutcomeBanner state={state} />
       <Controls state={state} dispatch={dispatch} onNewMatch={() => newMatch()} />
       <ActionLog log={state.log} />
     </main>
@@ -111,6 +112,53 @@ function Stat({
         {value}
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Outcome banner: prominent result of the last showdown / match
+// ---------------------------------------------------------------------------
+
+function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
+  const show =
+    state.phase === 'SHOWDOWN' ||
+    state.phase === 'HAND_COMPLETE' ||
+    state.phase === 'MATCH_OVER'
+  if (!show || state.lastShowdown === null) {
+    return null
+  }
+
+  const sd = state.lastShowdown
+  const isTie = sd.outcome.kind === 'tie'
+  const winner = sd.outcome.kind === 'win' ? sd.outcome.winner : null
+
+  // Color: green if you won the hand, red if the bot did, amber on a tie.
+  const bg = isTie ? '#78350f' : winner === 'human' ? '#14532d' : '#7f1d1d'
+  const border = isTie ? '#f59e0b' : winner === 'human' ? '#22c55e' : '#ef4444'
+
+  const headline =
+    state.phase === 'MATCH_OVER'
+      ? `${playerLabel(state.matchWinner!)} vince il match ${state.score.human}-${state.score.bot}!`
+      : isTie
+        ? 'Pareggio: piatto diviso, si rigioca.'
+        : `${playerLabel(winner!)} ${winner === 'human' ? 'hai' : 'ha'} vinto la mano!`
+
+  return (
+    <section
+      style={{
+        marginTop: 16,
+        padding: '14px 16px',
+        borderRadius: 10,
+        background: bg,
+        border: `2px solid ${border}`,
+      }}
+    >
+      <div style={{ fontSize: 20, fontWeight: 800 }}>{headline}</div>
+      <div style={{ marginTop: 6, fontSize: 14, color: '#e2e8f0' }}>
+        Tu: <strong>{categoryLabel(sd.human)}</strong> [{sd.human.values.join(' ')}] · Bot:{' '}
+        <strong>{categoryLabel(sd.bot)}</strong> [{sd.bot.values.join(' ')}]
+      </div>
+    </section>
   )
 }
 
@@ -354,11 +402,9 @@ function Controls({
   const rowStyle = { display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' as const }
 
   if (state.phase === 'MATCH_OVER') {
+    // The winner headline is shown by OutcomeBanner; here we only offer a restart.
     return (
       <div style={rowStyle}>
-        <strong style={{ alignSelf: 'center' }}>
-          {playerLabel(state.matchWinner!)} vince il match!
-        </strong>
         <PrimaryButton onClick={onNewMatch}>Nuova partita</PrimaryButton>
       </div>
     )

@@ -196,9 +196,10 @@ function handleOpen(state: GameState, player: PlayerId, amount: number): GameSta
   const toPut = amount - hand.committed
   assert(toPut > 0, 'opening bet must add chips on top of what is already committed')
 
+  const opponent = otherPlayer(player)
   let next = commit(state, player, toPut)
-  next = { ...next, currentBet: amount, aggressor: player, toAct: otherPlayer(player) }
-  return withLog(next, `${labelOf(player)} punta ${amount}.`)
+  next = { ...next, currentBet: amount, aggressor: player, toAct: opponent }
+  return withLog(next, `${labelOf(player)} punta ${amount}. Tocca a ${labelOf(opponent)}: vedi o rilancia.`)
 }
 
 function handleCall(state: GameState, player: PlayerId, rng: Rng): GameState {
@@ -276,9 +277,16 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   next = setHand(next, 'human', { own: humanOwn })
   next = setHand(next, 'bot', { own: botOwn })
 
+  // Log the full flow: both players' rolled dice, then the common dice.
+  next = withLog(next, `Lancio — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
   const c = common.map((d) => d.value).join(', ')
   next = withLog(next, `Dadi comuni: ${c}. Ruba per primo ${labelOf(state.primary)}.`)
   return next
+}
+
+/** Formats a list of dice as their values, e.g. "3, 5, 5, 1". */
+function diceStr(dice: ReadonlyArray<{ readonly value: number }>): string {
+  return dice.map((d) => d.value).join(', ')
 }
 
 // --- STEAL ---
@@ -311,7 +319,7 @@ function enterRerollSelect(state: GameState): GameState {
   // Primary selects reroll first, then non-primary (order mirrors steal for consistency).
   return withLog(
     { ...state, phase: 'REROLL_SELECT', toAct: state.primary },
-    'Scelta dei dadi da rilanciare (max 3).',
+    'Scelta dei dadi da rilanciare (fino a 4, il rubato resta fisso).',
   )
 }
 
