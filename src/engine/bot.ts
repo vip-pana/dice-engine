@@ -1,0 +1,158 @@
+// Opponent AI as pure logic. chooseAction(state, player, rng) returns a single legal
+// Action for the current phase. It reuses the shared strategy helpers (steal + reroll)
+// so the bot plays the same policy the Monte Carlo simulator measures.
+//
+// All betting thresholds are NAMED CONSTANTS grouped in BOT_TUNING, so they are easy to
+// find and re-balance during playtest. The bot is deterministic given the Rng.
+
+import { chooseStolenDie, chooseRerollIndices, handScore } from './strategy'
+import type { Rng } from './rng'
+import type { Hand } from './types'
+import type { Action } from './actions'
+import { otherPlayer, type GameState, type PlayerId } from './gameTypes'
+
+/**
+ * Tunable bot parameters. These are intentionally simple and named so they can be
+ * dialed in during playtest without touching the decision logic below.
+ */
+export const BOT_TUNING = {
+  /**
+   * Second-bet strength gates, expressed as a normalized hand strength in [0, 1]
+   * (see normalizedStrength). Below `foldBelow` the bot folds to a bet; at/above
+   * `raiseAtLeast` it will raise; in between it just calls/checks.
+   */
+  foldBelow: 0.28,
+  raiseAtLeast: 0.62,
+  /**
+   * Initial bet is blind (before dice are rolled), so the bot plays it flat: it always
+   * calls the opening ante and never raises pre-roll. Kept as a flag for clarity.
+   */
+  raiseOnInitialBet: false,
+} as const
+
+/**
+ * Normalizes a hand's handScore into [0, 1] so thresholds are readable.
+ * The min is the weakest possible 5-die score, the max the strongest (five sixes-ish);
+ * we derive both from handScore of anchor hands to stay consistent with the scoring.
+ */
+const MIN_SCORE = handScore([{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }, { value: 6 }])
+// Strongest realistic hand: six-high straight is the top category in this game.
+const MAX_SCORE = handScore([{ value: 2 }, { value: 3 }, { value: 4 }, { value: 5 }, { value: 6 }])
+
+function normalizedStrength(hand: Hand): number {
+  const raw = handScore(hand)
+  const clamped = Math.max(MIN_SCORE, Math.min(MAX_SCORE, raw))
+  return (clamped - MIN_SCORE) / (MAX_SCORE - MIN_SCORE)
+}
+
+/** The bot's current 5-die hand (own 4 + stolen), if both are known. */
+function currentHand(state: GameState, player: PlayerId): Hand | null {
+  const h = state.hands[player]
+  if (h.own === null || h.stolen === null) {
+    return null
+  }
+  return [h.own[0], h.own[1], h.own[2], h.own[3], h.stolen]
+}
+
+/**
+ * Chooses a single legal action for `player` given the current phase.
+ * Throws if asked to act when it is not the player's turn (defensive; the caller should
+ * only invoke this when state.toAct === player).
+ */
+export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Action {
+  if (state.toAct !== player && state.phase !== 'HAND_COMPLETE') {
+    throw new Error('[bot] asked to act out of turn')
+  }
+
+  switch (state.phase) {
+    case 'INITIAL_BET':
+      return chooseInitialBet(state, player)
+    case 'STEAL':
+      return chooseSteal(state, player)
+    case 'REROLL_SELECT':
+      return chooseReroll(state, player, rng)
+    case 'SECOND_BET':
+      return chooseSecondBet(state, player)
+    case 'HAND_COMPLETE':
+      return { type: 'NEXT_HAND' }
+    case 'SHOWDOWN':
+    case 'MATCH_OVER':
+      throw new Error(`[bot] no action to take in phase ${state.phase}`)
+  }
+}
+
+// --- INITIAL_BET (blind) ---
+
+function chooseInitialBet(state: GameState, player: PlayerId): Action {
+  // Primary must open; non-primary responds. Blind, so keep it flat.
+  if (player === state.primary && state.currentBet === 0) {
+    return { type: 'OPEN', player }
+  }
+  if (BOT_TUNING.raiseOnInitialBet && state.raisesThisWindow < state.config.maxRaisesPerWindow) {
+    return { type: 'RAISE', player }
+  }
+  return { type: 'CALL', player }
+}
+
+// --- STEAL: greedy best common die ---
+
+function chooseSteal(state: GameState, player: PlayerId): Action {
+  const own = state.hands[player].own
+  if (own === null || state.common === null) {
+    throw new Error('[bot] steal requested before dice rolled')
+  }
+  // Only consider commons not already taken, keeping track of their original indices.
+  const availableIndices = [0, 1, 2].filter((i) => !state.stolenCommonIndices.includes(i))
+  const availableDice = availableIndices.map((i) => state.common![i]!)
+
+  // Greedy pick via the shared helper; map its local index back to the original index.
+  const { index: localIndex } = chooseStolenDie(own, availableDice)
+  return { type: 'STEAL', player, commonIndex: availableIndices[localIndex]! }
+}
+
+// --- REROLL_SELECT: reuse shared heuristic ---
+
+function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
+  const h = state.hands[player]
+  if (h.own === null || h.stolen === null) {
+    throw new Error('[bot] reroll requested before steal')
+  }
+  const indices = chooseRerollIndices(h.own, h.stolen, rng)
+  return { type: 'REROLL', player, ownIndices: indices }
+}
+
+// --- SECOND_BET: threshold on current hand strength ---
+
+function chooseSecondBet(state: GameState, player: PlayerId): Action {
+  const hand = currentHand(state, player)
+  if (hand === null) {
+    throw new Error('[bot] second bet requested before hand is formed')
+  }
+  const strength = normalizedStrength(hand)
+
+  // Is there an outstanding bet the bot must answer (someone raised above the floor)?
+  const owed = state.currentBet - state.hands[player].committed
+  const facingBet = owed > 0 || state.aggressor === otherPlayer(player)
+
+  if (facingBet) {
+    if (strength < BOT_TUNING.foldBelow) {
+      return { type: 'FOLD', player }
+    }
+    if (
+      strength >= BOT_TUNING.raiseAtLeast &&
+      state.raisesThisWindow < state.config.maxRaisesPerWindow
+    ) {
+      return { type: 'RAISE', player }
+    }
+    return { type: 'CALL', player } // see the bet
+  }
+
+  // No bet to answer: the bot may check or open a bet.
+  if (
+    strength >= BOT_TUNING.raiseAtLeast &&
+    state.raisesThisWindow < state.config.maxRaisesPerWindow
+  ) {
+    return { type: 'RAISE', player } // bet for value
+  }
+  return { type: 'CALL', player } // check
+}
