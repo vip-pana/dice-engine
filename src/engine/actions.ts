@@ -37,4 +37,14 @@ export interface NextHandAction {
   readonly type: 'NEXT_HAND'
 }
 
-export type Action = BetAction | StealAction | RerollAction | NextHandAction
+/** Roll both players' dice to decide the primary for this hand (valid in ROLL_OFF). */
+export interface RollOffAction {
+  readonly type: 'ROLL_OFF'
+}
+
+export type Action =
+  | BetAction
+  | StealAction
+  | RerollAction
+  | NextHandAction
+  | RollOffAction

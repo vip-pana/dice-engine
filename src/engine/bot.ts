@@ -60,7 +60,15 @@ function currentHand(state: GameState, player: PlayerId): Hand | null {
  * only invoke this when state.toAct === player).
  */
 export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Action {
-  if (state.toAct !== player && state.phase !== 'HAND_COMPLETE') {
+  // ROLL_OFF and HAND_COMPLETE are system transitions with no per-player turn.
+  if (state.phase === 'ROLL_OFF') {
+    return { type: 'ROLL_OFF' }
+  }
+  if (state.phase === 'HAND_COMPLETE') {
+    return { type: 'NEXT_HAND' }
+  }
+
+  if (state.toAct !== player) {
     throw new Error('[bot] asked to act out of turn')
   }
 
@@ -73,8 +81,6 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
       return chooseReroll(state, player, rng)
     case 'SECOND_BET':
       return chooseSecondBet(state, player)
-    case 'HAND_COMPLETE':
-      return { type: 'NEXT_HAND' }
     case 'SHOWDOWN':
     case 'MATCH_OVER':
       throw new Error(`[bot] no action to take in phase ${state.phase}`)

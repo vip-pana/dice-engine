@@ -17,8 +17,9 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * Phases of a single hand, in fixed order (see SPEC). The reducer advances through
  * these; only actions valid for the current phase are accepted.
  *
- *  INITIAL_BET   -> both players settle the opening bet (no fold allowed)
- *  STEAL         -> non-primary steals a common die first, then primary (exclusive)
+ *  ROLL_OFF      -> both players roll one die; highest becomes primary (tie -> re-roll)
+ *  INITIAL_BET   -> primary MUST bet the ante (no check, no fold); opponent see/raise
+ *  STEAL         -> primary steals a common die first, then non-primary (exclusive)
  *  REROLL_SELECT -> each player picks which own dice to reroll (max 3, >=1 kept)
  *  SECOND_BET    -> primary check/bet; opponent see/raise/FOLD (only fold window)
  *  SHOWDOWN      -> hands compared, pot awarded (or split + replay on total tie)
@@ -29,6 +30,7 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * STEAL, so there is no separate "rolling" phase to click through.
  */
 export type Phase =
+  | 'ROLL_OFF'
   | 'INITIAL_BET'
   | 'STEAL'
   | 'REROLL_SELECT'
@@ -94,8 +96,18 @@ export interface GameState {
   readonly config: BetConfig
   readonly phase: Phase
 
-  /** Seat that holds the primary role this hand. Alternates each hand. */
+  /**
+   * Seat that holds the primary role this hand — decided by the ROLL_OFF at the start
+   * of each hand (highest die wins). Meaningful from INITIAL_BET onward; during ROLL_OFF
+   * it holds the previous hand's value and should not be relied upon.
+   */
   readonly primary: PlayerId
+
+  /**
+   * The most recent roll-off dice (human vs bot). Set when ROLL_OFF resolves so the UI
+   * can show who won the right to be primary. Null before the first roll-off.
+   */
+  readonly rollOff: { readonly human: Die; readonly bot: Die } | null
 
   /** 1-based index of the current hand within the match. */
   readonly handNumber: number

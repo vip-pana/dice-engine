@@ -34,11 +34,15 @@ function emptyHandState(): PlayerHandState {
 export interface NewGameOptions {
   readonly config?: BetConfig
   readonly startingBankroll?: number
-  /** Seat that opens as primary in hand 1. Defaults to 'human'. */
+  /**
+   * Provisional primary before the first roll-off (only affects `toAct` display during
+   * ROLL_OFF, which is a system roll). Defaults to 'human'. The actual primary of every
+   * hand is decided by the ROLL_OFF.
+   */
   readonly firstPrimary?: PlayerId
 }
 
-/** Creates the initial match state at the start of hand 1 (INITIAL_BET phase). */
+/** Creates the initial match state at the start of hand 1 (ROLL_OFF phase). */
 export function createInitialState(options: NewGameOptions = {}): GameState {
   const config = options.config ?? DEFAULT_BET_CONFIG
   const bankroll = options.startingBankroll ?? DEFAULT_STARTING_BANKROLL
@@ -46,8 +50,9 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
 
   return {
     config,
-    phase: 'INITIAL_BET',
+    phase: 'ROLL_OFF',
     primary,
+    rollOff: null,
     handNumber: 1,
     score: { human: 0, bot: 0 },
     bankroll: { human: bankroll, bot: bankroll },
@@ -59,10 +64,10 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
     raisesThisWindow: 0,
     aggressor: null,
     checksThisWindow: 0,
-    toAct: primary, // primary opens the initial bet
+    toAct: primary,
     firstBetAmount: 0,
     lastShowdown: null,
-    log: [`Mano 1 — apre ${labelOf(primary)}.`],
+    log: ['Mano 1 — tira il dado per decidere chi inizia.'],
     matchWinner: null,
   }
 }
@@ -120,6 +125,8 @@ function assert(condition: boolean, message: string): asserts condition {
  */
 export function reducer(state: GameState, action: Action, rng: Rng): GameState {
   switch (action.type) {
+    case 'ROLL_OFF':
+      return handleRollOff(state, rng)
     case 'OPEN':
       return handleOpen(state, action.player)
     case 'CALL':
@@ -135,6 +142,36 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
     case 'NEXT_HAND':
       return handleNextHand(state)
   }
+}
+
+// --- ROLL_OFF: highest die decides the primary ---
+
+function handleRollOff(state: GameState, rng: Rng): GameState {
+  assert(state.phase === 'ROLL_OFF', 'ROLL_OFF only allowed in ROLL_OFF phase')
+
+  const human = { value: rng.rollDie() }
+  const bot = { value: rng.rollDie() }
+
+  if (human.value === bot.value) {
+    // Tie: nobody wins the roll-off, re-roll. Record the dice for display.
+    return withLog(
+      { ...state, rollOff: { human, bot } },
+      `Tiro iniziale: Tu ${human.value} — Bot ${bot.value}. Pareggio, si ritira.`,
+    )
+  }
+
+  const winner: PlayerId = human.value > bot.value ? 'human' : 'bot'
+  const next: GameState = {
+    ...state,
+    rollOff: { human, bot },
+    primary: winner,
+    phase: 'INITIAL_BET',
+    toAct: winner, // primary opens the initial bet
+  }
+  return withLog(
+    next,
+    `Tiro iniziale: Tu ${human.value} — Bot ${bot.value}. Inizia ${labelOf(winner)}.`,
+  )
 }
 
 // --- Betting: INITIAL_BET and SECOND_BET ---
@@ -165,6 +202,12 @@ function handleCall(state: GameState, player: PlayerId, rng: Rng): GameState {
   assert(toMatch >= 0, 'nothing to call implies negative match')
 
   const isCheck = toMatch === 0 && state.aggressor === null
+  // No check in the first bet: the primary must post the ante (via OPEN) and the opponent
+  // must see/raise. Checking is only allowed in the second bet.
+  assert(
+    !(isCheck && state.phase === 'INITIAL_BET'),
+    'cannot check in the initial bet — you must bet',
+  )
 
   let next = toMatch > 0 ? commit(state, player, toMatch) : state
   next = withLog(
@@ -233,25 +276,24 @@ function settleWindow(state: GameState, rng: Rng): GameState {
 // --- Transition: initial bet settled -> roll dice, go to STEAL ---
 
 function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
+  // Own dice are rolled first (human then bot), then the common dice.
   const humanOwn = rollOwnDice(rng)
   const botOwn = rollOwnDice(rng)
   const common = rollCommonDice(rng)
-
-  const nonPrimary = otherPlayer(state.primary)
 
   let next: GameState = {
     ...state,
     phase: 'STEAL',
     common,
     firstBetAmount: state.currentBet,
-    // Non-primary steals first.
-    toAct: nonPrimary,
+    // Primary (the roll-off winner) steals first.
+    toAct: state.primary,
   }
   next = setHand(next, 'human', { own: humanOwn })
   next = setHand(next, 'bot', { own: botOwn })
 
   const c = common.map((d) => d.value).join(', ')
-  next = withLog(next, `Dadi comuni: ${c}. Ruba per primo ${labelOf(nonPrimary)}.`)
+  next = withLog(next, `Dadi comuni: ${c}. Ruba per primo ${labelOf(state.primary)}.`)
   return next
 }
 
@@ -273,19 +315,18 @@ function handleSteal(state: GameState, player: PlayerId, commonIndex: number): G
   next = withLog(next, `${labelOf(player)} ruba il dado ${stolen.value}.`)
 
   const nonPrimary = otherPlayer(state.primary)
-  if (player === nonPrimary) {
-    // Non-primary stole first; primary steals next.
-    return { ...next, toAct: state.primary }
+  if (player === state.primary) {
+    // Primary stole first; non-primary steals next.
+    return { ...next, toAct: nonPrimary }
   }
-  // Primary just stole (second). Both have stolen -> reroll selection phase.
+  // Non-primary just stole (second). Both have stolen -> reroll selection phase.
   return enterRerollSelect(next)
 }
 
 function enterRerollSelect(state: GameState): GameState {
-  // Non-primary selects reroll first, then primary (order mirrors steal for consistency).
-  const nonPrimary = otherPlayer(state.primary)
+  // Primary selects reroll first, then non-primary (order mirrors steal for consistency).
   return withLog(
-    { ...state, phase: 'REROLL_SELECT', toAct: nonPrimary },
+    { ...state, phase: 'REROLL_SELECT', toAct: state.primary },
     'Scelta dei dadi da rilanciare (max 3).',
   )
 }
@@ -319,8 +360,8 @@ function handleReroll(
   )
 
   const nonPrimary = otherPlayer(state.primary)
-  if (player === nonPrimary) {
-    return { ...next, toAct: state.primary }
+  if (player === state.primary) {
+    return { ...next, toAct: nonPrimary }
   }
   // Both selections in -> SECOND_BET. Primary acts first (check or bet).
   return enterSecondBet(next)
@@ -446,19 +487,21 @@ function resolveHand(state: GameState, outcome: HandOutcome): GameState {
   return { ...next, phase: 'HAND_COMPLETE' }
 }
 
-/** Starts the next hand: alternates primary, resets per-hand state, re-opens INITIAL_BET. */
+/**
+ * Starts the next hand: resets per-hand state and returns to ROLL_OFF, where a fresh
+ * die-off decides the new primary. (The primary is no longer alternated; it is won each
+ * hand by the highest roll-off die.)
+ */
 function handleNextHand(state: GameState): GameState {
   assert(state.phase === 'HAND_COMPLETE', 'NEXT_HAND only allowed after a hand completes')
 
-  const wasTie = state.lastShowdown?.outcome.kind === 'tie'
-  // A tie is replayed WITHOUT alternating the primary role (the hand "did not count").
-  const nextPrimary = wasTie ? state.primary : otherPlayer(state.primary)
   const nextHandNumber = state.handNumber + 1
 
   return {
     ...state,
-    phase: 'INITIAL_BET',
-    primary: nextPrimary,
+    phase: 'ROLL_OFF',
+    // primary keeps its previous value until the next roll-off resolves it.
+    rollOff: null,
     handNumber: nextHandNumber,
     pot: 0,
     hands: { human: emptyHandState(), bot: emptyHandState() },
@@ -468,12 +511,12 @@ function handleNextHand(state: GameState): GameState {
     raisesThisWindow: 0,
     aggressor: null,
     checksThisWindow: 0,
-    toAct: nextPrimary,
+    toAct: state.primary,
     firstBetAmount: 0,
     lastShowdown: null,
     log: [
       ...state.log,
-      `Mano ${nextHandNumber} — apre ${labelOf(nextPrimary)}.`,
+      `Mano ${nextHandNumber} — tira il dado per decidere chi inizia.`,
     ],
     matchWinner: null,
   }

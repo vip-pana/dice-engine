@@ -53,6 +53,7 @@ function BotAutoPlayer(props: {
   useEffect(() => {
     const botActs =
       state.toAct === 'bot' &&
+      state.phase !== 'ROLL_OFF' && // roll-off is always initiated by the human's click
       state.phase !== 'HAND_COMPLETE' &&
       state.phase !== 'SHOWDOWN' &&
       state.phase !== 'MATCH_OVER'
@@ -134,6 +135,8 @@ function Table({
         <strong>{phaseLabel(state.phase)}</strong>
       </p>
 
+      <RollOffView state={state} />
+
       <h3 style={{ marginBottom: 6 }}>Dadi comuni</h3>
       <CommonRow state={state} canSteal={state.phase === 'STEAL' && humanIsToAct} dispatch={dispatch} />
 
@@ -143,6 +146,44 @@ function Table({
       <h3 style={{ marginBottom: 6 }}>I tuoi dadi</h3>
       <HumanRow state={state} dispatch={dispatch} />
     </section>
+  )
+}
+
+function RollOffView({ state }: { state: GameState }): JSX.Element | null {
+  // Show the roll-off dice while deciding, and keep them visible through the hand so the
+  // player remembers who won the right to start.
+  if (state.rollOff === null && state.phase !== 'ROLL_OFF') {
+    return null
+  }
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        padding: '10px 14px',
+        borderRadius: 10,
+        background: '#0b1220',
+        border: '1px solid #1e293b',
+        marginBottom: 16,
+      }}
+    >
+      <strong style={{ fontSize: 13 }}>Tiro per iniziare</strong>
+      {state.rollOff === null ? (
+        <Placeholder text="Premi «Tira il dado»" />
+      ) : (
+        <>
+          <DieView value={state.rollOff.human.value} caption="tu" />
+          <span style={{ color: '#64748b' }}>vs</span>
+          <DieView value={state.rollOff.bot.value} caption="bot" />
+          {state.phase !== 'ROLL_OFF' && (
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>
+              Inizia <strong style={{ color: '#e2e8f0' }}>{playerLabel(state.primary)}</strong>
+            </span>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -359,6 +400,17 @@ function Controls({
     )
   }
 
+  // ROLL_OFF: the human rolls to decide who starts. (System roll — no per-player turn.)
+  if (state.phase === 'ROLL_OFF') {
+    return (
+      <div style={rowStyle}>
+        <PrimaryButton onClick={() => dispatch({ type: 'ROLL_OFF' })}>
+          Tira il dado
+        </PrimaryButton>
+      </div>
+    )
+  }
+
   if (state.toAct !== 'human') {
     return (
       <div style={rowStyle}>
@@ -375,19 +427,20 @@ function Controls({
       return (
         <div style={rowStyle}>
           <PrimaryButton onClick={() => dispatch({ type: 'OPEN', player: 'human' })}>
-            Apri ({state.config.ante})
+            Punta {state.config.ante} monete
           </PrimaryButton>
         </div>
       )
     }
+    const owed = state.currentBet - state.hands.human.committed
     return (
       <div style={rowStyle}>
         <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
-          Vedi
+          Vedi (paga {owed} monete)
         </PrimaryButton>
         {canRaise && (
           <SecondaryButton onClick={() => dispatch({ type: 'RAISE', player: 'human' })}>
-            Rilancia (+{state.config.raiseStep})
+            Rilancia (+{state.config.raiseStep} monete)
           </SecondaryButton>
         )}
       </div>
@@ -400,15 +453,15 @@ function Controls({
     return (
       <div style={rowStyle}>
         <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
-          {facingBet ? `Vedi (${owed})` : 'Passa'}
+          {facingBet ? `Vedi (paga ${owed} monete)` : 'Passa (nessuna puntata)'}
         </PrimaryButton>
         {canRaise && (
           <SecondaryButton onClick={() => dispatch({ type: 'RAISE', player: 'human' })}>
-            {facingBet ? 'Rilancia' : 'Punta'} (+{state.config.raiseStep})
+            {facingBet ? 'Rilancia' : 'Punta'} (+{state.config.raiseStep} monete)
           </SecondaryButton>
         )}
         <DangerButton onClick={() => dispatch({ type: 'FOLD', player: 'human' })}>
-          Lascia
+          Lascia (rinuncia alla mano)
         </DangerButton>
       </div>
     )
@@ -509,6 +562,8 @@ function liveHumanHand(hand: PlayerHandState): Hand | null {
 
 function phaseLabel(phase: GameState['phase']): string {
   switch (phase) {
+    case 'ROLL_OFF':
+      return 'Tiro iniziale'
     case 'INITIAL_BET':
       return 'Scommessa iniziale'
     case 'STEAL':
