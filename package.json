@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
-    "sim": "tsx src/sim/montecarlo.ts"
+    "sim": "tsx src/sim/montecarlo.ts",
+    "sim:optimal": "tsx src/sim/montecarlo-optimal.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
