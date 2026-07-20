@@ -55,14 +55,14 @@ const GDD_TARGET: Record<string, number | undefined> = {
   'Scala di sei': 6,
 }
 
-function runSimulation(trials: number, seed: number): Map<string, number> {
+function runSimulation(trials: number, seed: number, maxReroll: number): Map<string, number> {
   const rng = createRng(seed)
   const counts = new Map<string, number>()
   for (const label of CATEGORY_ORDER) {
     counts.set(label, 0)
   }
   for (let i = 0; i < trials; i++) {
-    const finalHand = playHeuristicHand(rng)
+    const finalHand = playHeuristicHand(rng, maxReroll)
     const label = labelOf(evaluateHand(finalHand))
     counts.set(label, (counts.get(label) ?? 0) + 1)
   }
@@ -76,11 +76,14 @@ function formatPct(n: number): string {
 function main(): void {
   const trials = Number(process.env['SIM_TRIALS'] ?? 100_000)
   const seed = Number(process.env['SIM_SEED'] ?? 20260719)
+  // Reroll cap for the sim only. Defaults to the game's current rule (4). Set to 3 to
+  // measure the old "max 3" constraint without changing the engine rules.
+  const maxReroll = Number(process.env['SIM_MAX_REROLL'] ?? 4)
 
   console.log(`Monte Carlo — ${trials.toLocaleString('it-IT')} mani, seed ${seed}`)
-  console.log('Strategia: furto greedy + reroll euristico (fino a 4), stessa del bot.\n')
+  console.log(`Strategia: furto greedy + reroll euristico (fino a ${maxReroll}), stessa del bot.\n`)
 
-  const counts = runSimulation(trials, seed)
+  const counts = runSimulation(trials, seed, maxReroll)
 
   const nameWidth = Math.max(...CATEGORY_ORDER.map((c) => c.length))
   console.log(

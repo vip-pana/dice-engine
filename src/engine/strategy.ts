@@ -96,9 +96,10 @@ export function chooseRerollIndices(
   stolen: Die,
   rng: Rng,
   samplesPerOption = 60,
+  maxReroll: number = MAX_REROLL,
 ): readonly number[] {
   const ownIndices = [0, 1, 2, 3] as const
-  const minKeep = own.length - MAX_REROLL // = 1
+  const minKeep = own.length - maxReroll // how many own dice must be kept
 
   let bestReroll: readonly number[] = []
   let bestScore = -Infinity
@@ -144,10 +145,10 @@ export function chooseStolenDie(
  * Full heuristic play of a single hand: roll own + common, greedy-steal the best common
  * die, then reroll by heuristic. Returns the final 5-die hand. Used by the simulator.
  */
-export function playHeuristicHand(rng: Rng): Hand {
+export function playHeuristicHand(rng: Rng, maxReroll: number = MAX_REROLL): Hand {
   const own = rollOwnDice(rng)
   const common = rollCommonDice(rng)
   const { die: stolen } = chooseStolenDie(own, common)
-  const reroll = new Set(chooseRerollIndices(own, stolen, rng))
+  const reroll = new Set(chooseRerollIndices(own, stolen, rng, 60, maxReroll))
   return finalHand(own, stolen, reroll, rng)
 }
