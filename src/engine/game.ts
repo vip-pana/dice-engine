@@ -6,9 +6,20 @@
 // send legal actions; tests assert the guards).
 
 import { evaluateHand, compareHands } from './hand'
-import { rollOwnDice, rollCommonDice, MAX_REROLL, type OwnDice } from './strategy'
+import { abilitySpec, rerollDie } from './abilities'
+import {
+  rollOwnDice,
+  rollCommonDice,
+  rollRandomLoadout,
+  MAX_REROLL,
+  NO_ABILITY_DROPS,
+  PLAIN_LOADOUT,
+  type AbilityDropConfig,
+  type Loadout,
+  type OwnDice,
+} from './strategy'
 import type { Rng } from './rng'
-import type { Hand } from './types'
+import type { Die, Hand } from './types'
 import type { Action } from './actions'
 import {
   DEFAULT_BET_CONFIG,
@@ -28,7 +39,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function emptyHandState(): PlayerHandState {
-  return { own: null, stolen: null, committed: 0, rerollSelection: null }
+  return { own: null, stolen: null, committed: 0, rerollSelection: null, concealedIndices: [] }
 }
 
 export interface NewGameOptions {
@@ -40,6 +51,21 @@ export interface NewGameOptions {
    * hand is decided by the ROLL_OFF.
    */
   readonly firstPrimary?: PlayerId
+  /**
+   * Per-seat FIXED die loadouts. Omitted seats get four plain dice, so leaving this out
+   * yields the base game unchanged.
+   *
+   * A seat listed here is pinned: `abilityDrops` never overwrites it. That keeps the
+   * deterministic setup used by tests and by balance runs available alongside the
+   * random-drop mode.
+   */
+  readonly loadouts?: Partial<Record<PlayerId, Loadout>>
+  /**
+   * Random ability drops. When set, every hand re-rolls the loadout of each seat that is
+   * NOT pinned in `loadouts`, and the common dice draw their own abilities. Defaults to
+   * no drops (base game).
+   */
+  readonly abilityDrops?: AbilityDropConfig
 }
 
 /** Creates the initial match state at the start of hand 1 (ROLL_OFF phase). */
@@ -51,6 +77,15 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
   return {
     config,
     phase: 'ROLL_OFF',
+    loadouts: {
+      human: options.loadouts?.human ?? PLAIN_LOADOUT,
+      bot: options.loadouts?.bot ?? PLAIN_LOADOUT,
+    },
+    pinnedLoadouts: {
+      human: options.loadouts?.human !== undefined,
+      bot: options.loadouts?.bot !== undefined,
+    },
+    abilityDrops: options.abilityDrops ?? NO_ABILITY_DROPS,
     primary,
     rollOff: null,
     handNumber: 1,
@@ -114,6 +149,51 @@ function assert(condition: boolean, message: string): asserts condition {
   }
 }
 
+/**
+ * The largest total bet `player` could cover alone: what they have left plus what they
+ * already put in. Betting is stated as a TOTAL ("bet to 40"), not as an increment, so the
+ * ceiling has to include the existing commitment.
+ */
+function ownStack(state: GameState, player: PlayerId): number {
+  return state.bankroll[player] + state.hands[player].committed
+}
+
+/**
+ * The EFFECTIVE stack: the most anyone can be committed to this hand.
+ *
+ * Capped by the SHORTER of the two stacks, because chips the opponent cannot cover can
+ * never be won. In heads-up this is equivalent to running side pots — the excess would
+ * just be returned — and it avoids modelling multiple pots entirely. Consequence: facing
+ * an all-in short stack, the rich player simply cannot bet more than the short one has.
+ */
+export function maxBetFor(state: GameState, player: PlayerId): number {
+  return Math.min(ownStack(state, player), ownStack(state, otherPlayer(player)))
+}
+
+/**
+ * Guards a bet against the effective stack.
+ *
+ * This is the rule, so it lives in the engine: the UI clamps its input too, but a UI is
+ * only a suggestion — the reducer is what makes a bankroll impossible to overdraw, for
+ * the bot and for any future client alike.
+ */
+function assertAffordable(state: GameState, player: PlayerId, amount: number): void {
+  const max = maxBetFor(state, player)
+  assert(
+    amount <= max,
+    `bet of ${amount} exceeds the effective stack (max ${max})`,
+  )
+}
+
+/**
+ * True when neither player has anything left to wager, so a betting round would be a
+ * formality with nothing at stake. Such rounds are SKIPPED rather than presented with
+ * every action disabled — being asked to bet nothing is worse than not being asked.
+ */
+function noChipsBehind(state: GameState): boolean {
+  return maxBetFor(state, 'human') <= 0 && maxBetFor(state, 'bot') <= 0
+}
+
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
@@ -130,12 +210,14 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
       return handleOpen(state, action.player, action.amount)
     case 'CALL':
       return handleCall(state, action.player, rng)
+    case 'FOLD':
+      return handleFold(state, action.player)
     case 'RAISE':
       return handleRaise(state, action.player, action.amount)
     case 'STEAL':
       return handleSteal(state, action.player, action.commonIndex)
     case 'REROLL':
-      return handleReroll(state, action.player, action.ownIndices)
+      return handleReroll(state, action.player, action.ownIndices, rng)
     case 'NEXT_HAND':
       return handleNextHand(state)
   }
@@ -158,17 +240,26 @@ function handleRollOff(state: GameState, rng: Rng): GameState {
   }
 
   const winner: PlayerId = human.value > bot.value ? 'human' : 'bot'
-  const next: GameState = {
+  let next: GameState = {
     ...state,
     rollOff: { human, bot },
     primary: winner,
     phase: 'INITIAL_BET',
     toAct: winner, // primary opens the initial bet
   }
-  return withLog(
+  next = withLog(
     next,
     `Tiro iniziale: Tu ${human.value} — Bot ${bot.value}. Inizia ${labelOf(winner)}.`,
   )
+
+  // Nobody has chips left: skip the betting round entirely and deal. The hand still
+  // plays out for the Bo3 point, it is just played for no money.
+  if (noChipsBehind(next)) {
+    next = withLog(next, 'Nessuno ha monete da puntare: si gioca la mano senza puntate.')
+    return startHandAfterInitialBet(next, rng)
+  }
+
+  return next
 }
 
 // --- Betting: INITIAL_BET and SECOND_BET ---
@@ -189,17 +280,33 @@ function handleOpen(state: GameState, player: PlayerId, amount: number): GameSta
   assert(player === state.primary, 'only the primary opens a betting round')
   assert(state.aggressor === null, 'the round is already opened')
 
-  const min = openMinimum(state)
+  assertAffordable(state, player, amount)
+
+  // The minimum and the bankroll ceiling can contradict each other: a player too poor to
+  // meet the minimum must still be able to act (there is no fold in this game). So the
+  // minimum is waived exactly when the player is shoving their whole stack.
+  const max = maxBetFor(state, player)
+  const min = Math.min(openMinimum(state), max)
   assert(amount >= min, `opening bet must be at least ${min}`)
 
   const hand = state.hands[player]
   const toPut = amount - hand.committed
-  assert(toPut > 0, 'opening bet must add chips on top of what is already committed')
+  // Normally an open must add chips. A player with an empty bankroll is the exception:
+  // they are already all-in from an earlier round, and with no fold in this game refusing
+  // the action would leave them with no legal move at all.
+  assert(
+    toPut > 0 || state.bankroll[player] === 0,
+    'opening bet must add chips on top of what is already committed',
+  )
 
   const opponent = otherPlayer(player)
+  const allIn = amount === max
   let next = commit(state, player, toPut)
   next = { ...next, currentBet: amount, aggressor: player, toAct: opponent }
-  return withLog(next, `${labelOf(player)} punta ${amount}. Tocca a ${labelOf(opponent)}: vedi o rilancia.`)
+  return withLog(
+    next,
+    `${labelOf(player)} punta ${amount}${allIn ? ' (all-in)' : ''}. Tocca a ${labelOf(opponent)}: vedi o rilancia.`,
+  )
 }
 
 function handleCall(state: GameState, player: PlayerId, rng: Rng): GameState {
@@ -209,15 +316,43 @@ function handleCall(state: GameState, player: PlayerId, rng: Rng): GameState {
   assert(state.aggressor !== null, 'nothing to call — the round has not been opened')
 
   const hand = state.hands[player]
-  const toMatch = state.currentBet - hand.committed
-  assert(toMatch >= 0, 'nothing to call implies negative match')
+  const owed = state.currentBet - hand.committed
+  assert(owed >= 0, 'nothing to call implies negative match')
+
+  // A caller can never owe more than they hold: cap at the bankroll (an all-in call).
+  // Unlike OPEN/RAISE this is a clamp, not an assert — the amount is forced by the
+  // opponent's bet, so refusing it would leave the player with no legal action at all.
+  const toMatch = Math.min(owed, state.bankroll[player])
 
   const next = withLog(
     toMatch > 0 ? commit(state, player, toMatch) : state,
-    `${labelOf(player)} vede (${toMatch}).`,
+    toMatch < owed
+      ? `${labelOf(player)} vede all-in (${toMatch}).`
+      : `${labelOf(player)} vede (${toMatch}).`,
   )
   // A call that matches the current bet closes the round.
   return settleWindow(next, rng)
+}
+
+/**
+ * Gives up the hand. The opponent takes the pot and the Bo3 point without a showdown.
+ *
+ * Only legal in SECOND_BET and only when facing a bet — the two restrictions the game
+ * design calls for. Note there is no showdown info to record, so `lastShowdown` keeps
+ * whatever the previous hand left; the UI reads `phase` to know a fold ended this one.
+ */
+function handleFold(state: GameState, player: PlayerId): GameState {
+  assert(state.phase === 'SECOND_BET', 'FOLD only allowed in the second betting round')
+  assert(state.toAct === player, 'not this player to act')
+  assert(state.aggressor !== null, 'cannot fold when there is no bet to face')
+  assert(state.aggressor !== player, 'cannot fold to your own bet')
+
+  const winner = otherPlayer(player)
+  const next = withLog(
+    state,
+    `${labelOf(player)} si ritira. ${labelOf(winner)} vince la mano senza showdown.`,
+  )
+  return resolveHand(next, { kind: 'win', winner })
 }
 
 function handleRaise(state: GameState, player: PlayerId, amount: number): GameState {
@@ -232,6 +367,7 @@ function handleRaise(state: GameState, player: PlayerId, amount: number): GameSt
   // Raise TO `amount`: must exceed the current bet by at least minBet.
   const minRaiseTo = state.currentBet + state.config.minBet
   assert(amount >= minRaiseTo, `raise must be to at least ${minRaiseTo}`)
+  assertAffordable(state, player, amount)
 
   const hand = state.hands[player]
   const toPut = amount - hand.committed
@@ -261,14 +397,19 @@ function settleWindow(state: GameState, rng: Rng): GameState {
 // --- Transition: initial bet settled -> roll dice, go to STEAL ---
 
 function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
+  // Which special dice each seat gets is drawn fresh every hand (unless the seat is
+  // pinned), so a lucky loadout is a property of the hand, not of the whole match.
+  const loadouts = drawLoadouts(state, rng)
+
   // Own dice are rolled first (human then bot), then the common dice.
-  const humanOwn = rollOwnDice(rng)
-  const botOwn = rollOwnDice(rng)
-  const common = rollCommonDice(rng)
+  const humanOwn = rollOwnDice(rng, loadouts.human)
+  const botOwn = rollOwnDice(rng, loadouts.bot)
+  const common = rollCommonDice(rng, state.abilityDrops)
 
   let next: GameState = {
     ...state,
     phase: 'STEAL',
+    loadouts,
     common,
     firstBetAmount: state.currentBet,
     // Primary (the roll-off winner) steals first.
@@ -277,16 +418,98 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   next = setHand(next, 'human', { own: humanOwn })
   next = setHand(next, 'bot', { own: botOwn })
 
+  // A Nero di Seppia in one seat's dice hides one of the OPPONENT's, so this has to run
+  // after both hands exist.
+  next = applyConcealment(next, rng)
+
   // Log the full flow: both players' rolled dice, then the common dice.
-  next = withLog(next, `Lancio — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
-  const c = common.map((d) => d.value).join(', ')
-  next = withLog(next, `Dadi comuni: ${c}. Ruba per primo ${labelOf(state.primary)}.`)
+  //
+  // Only the HUMAN's own concealed die is masked: the log is written for the human, so
+  // printing their hidden face would undo the concealment instantly. The bot's dice stay
+  // fully printed even when the bot itself cannot see one of them — that asymmetry IS the
+  // advantage a Nero di Seppia buys, and hiding it here would rob the caster of it.
+  next = withLog(
+    next,
+    `Lancio — Tu: ${handStr(next, 'human')}. Bot: ${diceStr(botOwn)}.`,
+  )
+  next = withLog(
+    next,
+    `Dadi comuni: ${diceStr(common)}. Ruba per primo ${labelOf(state.primary)}.`,
+  )
   return next
 }
 
-/** Formats a list of dice as their values, e.g. "3, 5, 5, 1". */
-function diceStr(dice: ReadonlyArray<{ readonly value: number }>): string {
-  return dice.map((d) => d.value).join(', ')
+/**
+ * Applies every Nero di Seppia on the table: each seat holding one conceals a single
+ * random die of the OPPONENT's four.
+ *
+ * Symmetric by construction — if both seats rolled one, both lose sight of a die. The
+ * choice of which die is uniform (per the design call) and drawn from the match Rng, so
+ * it replays identically from a seed.
+ */
+function applyConcealment(state: GameState, rng: Rng): GameState {
+  let next = state
+  for (const seat of ['human', 'bot'] as const) {
+    const own = state.hands[seat].own
+    if (own === null || !own.some((d) => d.ability === 'NERO_DI_SEPPIA')) {
+      continue
+    }
+    // The victim is the opponent: they lose sight of one of THEIR OWN dice.
+    const victim = otherPlayer(seat)
+    const hidden = rng.nextInt(0, 3)
+    next = setHand(next, victim, { concealedIndices: [hidden] })
+    next = withLog(
+      next,
+      `${labelOf(seat)} lancia il Nero di Seppia: un dado di ${labelOf(victim)} è nascosto fino allo showdown.`,
+    )
+  }
+  return next
+}
+
+/** Formats a seat's own dice for the log, masking the ones that seat cannot see. */
+function handStr(state: GameState, seat: PlayerId): string {
+  const own = state.hands[seat].own
+  if (own === null) {
+    return '—'
+  }
+  const concealed = new Set(state.hands[seat].concealedIndices)
+  return own.map((die, i) => (concealed.has(i) ? '?' : dieStr(die))).join(', ')
+}
+
+/**
+ * Loadouts for the hand about to start: a pinned seat keeps the loadout it was created
+ * with, an unpinned seat draws a fresh random one from the match Rng.
+ */
+function drawLoadouts(state: GameState, rng: Rng): Readonly<Record<PlayerId, Loadout>> {
+  return {
+    human: state.pinnedLoadouts.human
+      ? state.loadouts.human
+      : rollRandomLoadout(rng, state.abilityDrops),
+    bot: state.pinnedLoadouts.bot
+      ? state.loadouts.bot
+      : rollRandomLoadout(rng, state.abilityDrops),
+  }
+}
+
+/**
+ * Formats a list of dice as their values, e.g. "3, 5, 5, 1".
+ * A die with an ability shows what it rolled and what it kept, e.g. "☘6 (2/6/3)", so the
+ * log makes the ability's effect visible rather than silent.
+ */
+function diceStr(dice: readonly Die[]): string {
+  return dice.map(dieStr).join(', ')
+}
+
+/** Formats one die, annotating an ability roll with its icon and the faces it produced. */
+function dieStr(die: Die): string {
+  const spec = abilitySpec(die.ability)
+  if (spec === null) {
+    return `${die.value}`
+  }
+  // Only a multi-face ability has a split worth spelling out; a single-face one (the D4)
+  // still gets its icon, so the log never hides which die produced the value.
+  const split = die.rolls !== undefined && die.rolls.length > 1 ? ` (${die.rolls.join('/')})` : ''
+  return `${spec.icon}${die.value}${split}`
 }
 
 // --- STEAL ---
@@ -329,6 +552,7 @@ function handleReroll(
   state: GameState,
   player: PlayerId,
   ownIndices: readonly number[],
+  rng: Rng,
 ): GameState {
   assert(state.phase === 'REROLL_SELECT', 'REROLL only allowed in REROLL_SELECT')
   assert(state.toAct === player, 'not this player to choose reroll')
@@ -356,14 +580,14 @@ function handleReroll(
     return { ...next, toAct: nonPrimary }
   }
   // Both selections in -> SECOND_BET. Primary acts first (check or bet).
-  return enterSecondBet(next)
+  return enterSecondBet(next, rng)
 }
 
-function enterSecondBet(state: GameState): GameState {
+function enterSecondBet(state: GameState, rng: Rng): GameState {
   // The second bet is a fresh betting round: the first-round chips are already in the pot
   // and stay there, so we reset each player's per-round `committed` to 0 and start with no
   // bet on the table. The primary must OPEN with an amount >= the first bet (openMinimum),
-  // then the opponent must see/raise (no check, no fold).
+  // then the opponent must see, raise or fold.
   const reset: GameState = {
     ...state,
     phase: 'SECOND_BET',
@@ -376,6 +600,16 @@ function enterSecondBet(state: GameState): GameState {
       bot: { ...state.hands.bot, committed: 0 },
     },
   }
+
+  // Someone is already all-in from the first round: there is nothing left to wager, so
+  // go straight to the showdown rather than asking for a bet nobody can make.
+  if (noChipsBehind(reset)) {
+    return goToShowdown(
+      withLog(reset, 'Nessuno ha altre monete da puntare: si va direttamente allo showdown.'),
+      rng,
+    )
+  }
+
   return withLog(
     reset,
     `Seconda scommessa — punta ${labelOf(state.primary)} (minimo ${state.firstBetAmount}).`,
@@ -384,9 +618,13 @@ function enterSecondBet(state: GameState): GameState {
 
 // --- SHOWDOWN ---
 
+/**
+ * Rerolls the selected own dice. A rerolled die keeps its ability: the ability belongs to
+ * the physical die the player owns, so a Stella Essiccata re-splits into 3 on every reroll.
+ */
 function applyReroll(own: OwnDice, selection: readonly number[], rng: Rng): OwnDice {
   const set = new Set(selection)
-  const after = own.map((die, i) => (set.has(i) ? { value: rng.rollDie() } : die))
+  const after = own.map((die, i) => (set.has(i) ? rerollDie(rng, die) : die))
   return [after[0]!, after[1]!, after[2]!, after[3]!]
 }
 
@@ -421,8 +659,13 @@ function goToShowdown(state: GameState, rng: Rng): GameState {
     phase: 'SHOWDOWN',
     lastShowdown: showdown,
   }
-  next = setHand(next, 'human', { own: humanOwn })
-  next = setHand(next, 'bot', { own: botOwn })
+  // THE REVEAL: the showdown is exactly when concealment ends, so clearing it here is
+  // what makes a Nero di Seppia last "until the end of the hand" and no longer.
+  next = setHand(next, 'human', { own: humanOwn, concealedIndices: [] })
+  next = setHand(next, 'bot', { own: botOwn, concealedIndices: [] })
+  // Log the post-reroll dice so ability splits on rerolled dice are visible too. Safe to
+  // print in full: nothing is concealed any more.
+  next = withLog(next, `Dopo il rilancio — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
   next = withLog(next, describeShowdown(humanEval, botEval, outcome))
 
   return resolveHand(next, outcome)

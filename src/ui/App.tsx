@@ -1,44 +1,104 @@
 import { useEffect, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
+  abilitySpec,
+  ALL_ABILITY_IDS,
   chooseAction,
   evaluateHand,
   createRng,
+  DEFAULT_ABILITY_DROPS,
+  maxBetFor,
+  viewFor,
+  type AbilityId,
   type GameState,
   type Hand,
   type PlayerHandState,
 } from '../engine'
 import { useGame } from './useGame'
 import { categoryLabel, playerLabel } from './labels'
-import { DieView } from './components/DieView'
+import { DieView, ABILITY_ACCENT, ACCENT_BY_KIND } from './components/DieView'
 
 // A single Rng dedicated to the BOT's decision-making, kept separate from the match Rng
-// so the bot's internal sampling never disturbs the deterministic dice stream.
-const botBrainRng = createRng(0xb07)
+// so the bot's internal sampling never disturbs the dice stream. Randomly seeded so the
+// bot does not make the exact same reroll choices on every page load.
+const botBrainRng = createRng(Math.floor(Math.random() * 2 ** 31))
 
 export function App(): JSX.Element {
-  const { state, dispatch, newMatch } = useGame(1)
+  // Neither seat is pinned, so both draw fresh random specials every hand at the default
+  // drop rates. Pass `loadouts` here instead to pin a seat to a fixed set for playtesting.
+  // No seed: every reload deals a different match. Pass one to replay a specific game.
+  const { state: trueState, dispatch, newMatch } = useGame(undefined, {
+    abilityDrops: DEFAULT_ABILITY_DROPS,
+  })
+  const wide = useIsWide()
+
+  // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
+  // Seppia must be unreadable here too — including indirectly, via the "current hand"
+  // badge, which would otherwise reveal the hidden face by naming the category.
+  // BotAutoPlayer still receives the raw state; the bot filters its own view internally.
+  const state = viewFor(trueState, 'human')
 
   return (
-    <main
+    <div
       style={{
         fontFamily: 'system-ui, sans-serif',
-        maxWidth: 720,
-        margin: '0 auto',
-        padding: '1.5rem',
         color: '#e2e8f0',
         background: '#0f172a',
         minHeight: '100vh',
       }}
     >
-      <h1 style={{ marginTop: 0 }}>Poker di Dadi</h1>
-      <ScoreBar state={state} />
-      <BotAutoPlayer state={state} dispatch={dispatch} />
-      <Table state={state} dispatch={dispatch} />
-      <OutcomeBanner state={state} />
-      <Controls state={state} dispatch={dispatch} onNewMatch={() => newMatch()} />
-      <ActionLog log={state.log} />
-    </main>
+      {/*
+        Two columns on a wide screen, stacked on a narrow one. `minmax(0, 720px)` lets the
+        game column shrink below its content width instead of forcing a horizontal scroll,
+        which a bare `720px` track would do on a tablet.
+      */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: wide ? 'minmax(0, 720px) minmax(240px, 300px)' : 'minmax(0, 1fr)',
+          gap: 24,
+          alignItems: 'start',
+          maxWidth: 1100,
+          margin: '0 auto',
+          padding: '1.5rem',
+        }}
+      >
+        <main style={{ minWidth: 0 }}>
+          <h1 style={{ marginTop: 0 }}>Poker di Dadi</h1>
+          <ScoreBar state={state} />
+          <BotAutoPlayer state={trueState} dispatch={dispatch} />
+          <Table state={state} dispatch={dispatch} />
+          <OutcomeBanner state={state} />
+          <Controls state={state} dispatch={dispatch} onNewMatch={() => newMatch()} />
+          <ActionLog log={state.log} />
+        </main>
+        <AbilitySidebar state={state} sticky={wide} />
+      </div>
+    </div>
   )
+}
+
+/** Breakpoint below which the sidebar stacks under the game instead of sitting beside it. */
+const WIDE_BREAKPOINT = 1024
+
+/**
+ * Tracks whether the viewport is wide enough for the two-column layout.
+ *
+ * A matchMedia hook rather than a stylesheet because this app styles everything inline;
+ * adding a single CSS file just for one breakpoint would split where layout lives.
+ */
+function useIsWide(): boolean {
+  const query = `(min-width: ${WIDE_BREAKPOINT}px)`
+  const [wide, setWide] = useState(() => window.matchMedia(query).matches)
+
+  useEffect(() => {
+    const mql = window.matchMedia(query)
+    const onChange = (e: MediaQueryListEvent): void => setWide(e.matches)
+    setWide(mql.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [query])
+
+  return wide
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +173,132 @@ function Stat({
       </div>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Ability legend: the special dice that can turn up, and how often
+// ---------------------------------------------------------------------------
+
+/**
+ * The catalogue of every special die in the game.
+ *
+ * Driven by ALL_ABILITY_IDS, not by the drop pool, so a newly registered ability shows up
+ * here the moment it is added to abilities.ts — no UI edit required. Abilities excluded
+ * from the current drop pool are still listed but marked inactive, which makes an
+ * accidentally-empty pool visible rather than silent.
+ *
+ * It is a rules reference, not a per-seat inventory: with random drops a loadout changes
+ * every hand, so "what Tu has" would be stale by the next hand. The dice themselves carry
+ * the badge that says who got what.
+ */
+function AbilitySidebar({
+  state,
+  sticky,
+}: {
+  state: GameState
+  sticky: boolean
+}): JSX.Element {
+  const { ownChance, commonChance, pool } = state.abilityDrops
+  const dropsOn = ownChance > 0 || commonChance > 0
+
+  return (
+    <aside
+      style={{
+        position: sticky ? 'sticky' : 'static',
+        top: 24,
+        padding: 14,
+        borderRadius: 12,
+        background: '#0b1220',
+        border: `1px solid ${ABILITY_ACCENT}44`,
+      }}
+    >
+      <h2
+        style={{
+          margin: '0 0 4px',
+          fontSize: 14,
+          fontWeight: 700,
+          color: ABILITY_ACCENT,
+          letterSpacing: 0.3,
+        }}
+      >
+        Dadi speciali
+      </h2>
+
+      <p style={{ margin: '0 0 12px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        {dropsOn ? (
+          <>
+            Ogni tipo può uscire al massimo una volta: {pct(ownChance)} in mano,{' '}
+            {pct(commonChance)} tra i comuni. Si ripescano a ogni mano.
+          </>
+        ) : (
+          'Estrazioni disattivate: si gioca con soli dadi normali.'
+        )}
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {ALL_ABILITY_IDS.map((id) => (
+          <AbilityCard key={id} id={id} active={dropsOn && pool.includes(id)} />
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+/** One entry in the catalogue: icon, name, rules text. Dimmed when it cannot drop. */
+function AbilityCard({ id, active }: { id: AbilityId; active: boolean }): JSX.Element | null {
+  const spec = abilitySpec(id)
+  if (spec === null) {
+    return null
+  }
+  const accent = ACCENT_BY_KIND[spec.kind]
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 10,
+        padding: '9px 10px',
+        borderRadius: 9,
+        background: '#111c31',
+        border: `1px solid ${active ? `${accent}33` : '#1e293b'}`,
+        opacity: active ? 1 : 0.45,
+      }}
+      title={active ? spec.description : `${spec.description} (non in gioco)`}
+    >
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 26,
+          height: 26,
+          borderRadius: '50%',
+          background: accent,
+          color: '#0f172a',
+          fontSize: 15,
+          fontWeight: 800,
+          lineHeight: '26px',
+          textAlign: 'center',
+        }}
+      >
+        {spec.icon}
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{spec.name}</div>
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
+          {spec.description}
+        </div>
+        <div style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
+          {spec.kind === 'malus' ? 'Malus' : 'Bonus'}
+          {active ? '' : ' — non in gioco'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Formats a 0..1 probability as a whole-percent label. */
+function pct(chance: number): string {
+  return `${Math.round(chance * 100)}%`
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +441,8 @@ function CommonRow({
           <DieView
             key={index}
             value={die.value}
+            ability={die.ability}
+            rolls={die.rolls}
             dimmed={taken}
             caption={taken ? 'rubato' : canSteal ? 'rubabile' : undefined}
             onClick={
@@ -271,7 +459,10 @@ function CommonRow({
 
 function BotRow({ state }: { state: GameState }): JSX.Element {
   const hand = state.hands.bot
-  // Bot dice are always visible (open information).
+  // Bot dice are always visible (open information) — including one the bot itself cannot
+  // see, which is exactly what a landed Nero di Seppia buys us. Those get an ink marker
+  // so the ability is visibly doing something rather than being invisible to its caster.
+  const blinded = new Set(hand.concealedIndices)
   const live = liveFinalHand(hand) // reuse: own4 + stolen -> Hand, if formed
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
@@ -280,7 +471,13 @@ function BotRow({ state }: { state: GameState }): JSX.Element {
       ) : (
         <>
           {hand.own.map((die, i) => (
-            <DieView key={i} value={die.value} />
+            <DieView
+              key={i}
+              value={die.value}
+              ability={die.ability}
+              rolls={die.rolls}
+              blindedToOpponent={blinded.has(i)}
+            />
           ))}
           {hand.stolen ? (
             <DieView value={hand.stolen.value} caption="rubato" />
@@ -330,6 +527,10 @@ function HumanRow({
           <DieView
             key={i}
             value={die.value}
+            ability={die.ability}
+            rolls={die.rolls}
+            // A concealed die stays selectable: rerolling blind is allowed by design.
+            concealed={die.concealed}
             selected={selecting && selected.includes(i)}
             onClick={selecting ? () => toggle(i) : undefined}
           />
@@ -339,7 +540,14 @@ function HumanRow({
         ) : (
           <Placeholder text="dado rubato" />
         )}
-        {liveHand && <HandBadge label={categoryLabel(evaluateHand(liveHand))} live />}
+        {liveHand &&
+          (hand.own.some((d) => d.concealed) ? (
+            // One die is unknown, so the category is unknowable: showing the one computed
+            // from the placeholder would be a confident lie.
+            <HandBadge label="Mano incerta — un dado è nascosto" live />
+          ) : (
+            <HandBadge label={categoryLabel(evaluateHand(liveHand))} live />
+          ))}
       </div>
 
       {selecting && (
@@ -439,7 +647,9 @@ function Controls({
     )
   }
 
-  // Human's turn in a betting phase: free-amount open / call / raise. No fold, no check.
+  // Human's turn in a betting phase: free-amount open / call / raise, plus fold in the
+  // second round. No check. A player with nothing left is never asked for chips: the
+  // engine skips the round entirely when neither side can wager.
   if (state.phase === 'INITIAL_BET' || state.phase === 'SECOND_BET') {
     return <BettingControls state={state} dispatch={dispatch} />
   }
@@ -459,7 +669,8 @@ function Hint({ text }: { text: string }): JSX.Element {
 }
 
 /**
- * Free-amount betting controls for the human. No fold, no check:
+ * Free-amount betting controls for the human. No check; fold only in the second round
+ * while facing a bet:
  *  - If the round is not opened yet (human is primary), they must OPEN with an amount
  *    >= the phase minimum.
  *  - If facing a bet, they may CALL (match) or RAISE to a higher amount.
@@ -474,12 +685,18 @@ function BettingControls({
 }): JSX.Element {
   const isOpening = state.aggressor === null // human is the primary opening this round
   const phaseMin = state.phase === 'SECOND_BET' ? state.firstBetAmount : state.config.minBet
-  const minAmount = isOpening ? phaseMin : state.currentBet + state.config.minBet
-  const maxAmount = state.bankroll.human + state.hands.human.committed
+  // The engine waives the minimum for a player shoving their whole (effective) stack, so
+  // mirror that here or the UI would demand a bet the rules no longer require.
+  const maxAmount = maxBetFor(state, 'human')
+  const rawMin = isOpening ? phaseMin : state.currentBet + state.config.minBet
+  const minAmount = Math.min(rawMin, maxAmount)
   const canRaise =
     !isOpening &&
     state.raisesThisWindow < state.config.maxRaisesPerWindow &&
-    maxAmount >= minAmount
+    maxAmount > state.currentBet
+  // Folding is legal only in the second round while facing someone else's bet.
+  const canFold =
+    state.phase === 'SECOND_BET' && state.aggressor !== null && state.aggressor !== 'human'
 
   const [amount, setAmount] = useState<number>(minAmount)
 
@@ -495,8 +712,15 @@ function BettingControls({
     <div style={rowStyle}>
       {!isOpening && (
         <PrimaryButton onClick={() => dispatch({ type: 'CALL', player: 'human' })}>
-          Vedi (paga {owed} monete)
+          Vedi (paga {Math.min(owed, state.bankroll.human)} monete)
+          {owed > state.bankroll.human ? ' — all-in' : ''}
         </PrimaryButton>
+      )}
+
+      {canFold && (
+        <SecondaryButton onClick={() => dispatch({ type: 'FOLD', player: 'human' })}>
+          Lascia la mano
+        </SecondaryButton>
       )}
 
       {(isOpening || canRaise) && (
@@ -510,6 +734,10 @@ function BettingControls({
               step={state.config.minBet}
               value={amount}
               onChange={(e) => setAmount(Number(e.target.value))}
+              // `max` on a number input is only a hint — typing past it still fires
+              // onChange. Clamping on blur (rather than on every keystroke) snaps the
+              // field back into range without fighting the user mid-typing.
+              onBlur={() => setAmount((a) => clamp(a, minAmount, maxAmount))}
               style={{
                 width: 90,
                 marginLeft: 8,
@@ -523,13 +751,17 @@ function BettingControls({
             />
           </label>
           <PrimaryButton
-            onClick={() =>
+            disabled={!Number.isFinite(amount) || amount < minAmount || amount > maxAmount}
+            onClick={() => {
+              // Clamp again at dispatch: a click can land without the field ever blurring.
+              const bet = clamp(amount, minAmount, maxAmount)
+              setAmount(bet)
               dispatch(
                 isOpening
-                  ? { type: 'OPEN', player: 'human', amount }
-                  : { type: 'RAISE', player: 'human', amount },
+                  ? { type: 'OPEN', player: 'human', amount: bet }
+                  : { type: 'RAISE', player: 'human', amount: bet },
               )
-            }
+            }}
           >
             {isOpening ? `Punta ${amount} monete` : `Rilancia a ${amount}`}
           </PrimaryButton>
@@ -537,7 +769,13 @@ function BettingControls({
       )}
 
       <span style={{ fontSize: 12, color: '#64748b' }}>
-        (min {minAmount}, max {maxAmount} monete)
+        {maxAmount <= 0
+          ? 'Sei all-in: non hai altre monete da puntare.'
+          : `(min ${minAmount}, max ${maxAmount} monete${
+              maxAmount < state.bankroll.human + state.hands.human.committed
+                ? ' — limitato dallo stack avversario'
+                : ''
+            })`}
       </span>
     </div>
   )
@@ -576,7 +814,7 @@ function ActionLog({ log }: { log: readonly string[] }): JSX.Element {
 // Buttons
 // ---------------------------------------------------------------------------
 
-type ButtonProps = { onClick: () => void; children: ReactNode }
+type ButtonProps = { onClick: () => void; children: ReactNode; disabled?: boolean }
 
 const baseButton: CSSProperties = {
   padding: '10px 18px',
@@ -587,12 +825,47 @@ const baseButton: CSSProperties = {
   cursor: 'pointer',
 }
 
-function PrimaryButton({ onClick, children }: ButtonProps): JSX.Element {
+function PrimaryButton({ onClick, children, disabled = false }: ButtonProps): JSX.Element {
   return (
-    <button type="button" onClick={onClick} style={{ ...baseButton, background: '#2563eb', color: 'white' }}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...baseButton,
+        background: disabled ? '#1e293b' : '#2563eb',
+        color: disabled ? '#64748b' : 'white',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
       {children}
     </button>
   )
+}
+
+/** Muted button for the destructive/retreating choice, so it never outshines the bet. */
+function SecondaryButton({ onClick, children, disabled = false }: ButtonProps): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...baseButton,
+        background: 'transparent',
+        color: disabled ? '#475569' : '#94a3b8',
+        border: `1px solid ${disabled ? '#1e293b' : '#475569'}`,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Constrains `n` to [lo, hi]. */
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n))
 }
 
 // ---------------------------------------------------------------------------

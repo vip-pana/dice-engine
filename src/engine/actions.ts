@@ -7,12 +7,20 @@ import type { PlayerId } from './gameTypes'
  * Betting actions, valid in INITIAL_BET and SECOND_BET.
  *
  * Bet amounts are FREE (chosen by the player), subject to reducer-enforced minimums.
- * There is no fold and no check: to stay in a hand a player must always match or exceed
- * the current bet.
+ * There is no check: to stay in a hand a player must always match or exceed the current
+ * bet. Folding is allowed only in SECOND_BET, and only when facing a bet (see FoldAction).
  */
 export type BetAction =
   /** Match the current bet exactly (stay in without raising). */
   | { readonly type: 'CALL'; readonly player: PlayerId }
+  /**
+   * Give up the hand, conceding the pot to the opponent.
+   *
+   * Restricted to SECOND_BET and to a player facing a bet: by then both hands are fully
+   * formed, so folding is an informed read rather than a blind escape. The opponent takes
+   * the pot AND the Bo3 point, so a match can be won on folds alone.
+   */
+  | { readonly type: 'FOLD'; readonly player: PlayerId }
   /**
    * Raise the current bet TO `amount` (must be strictly greater than the current bet).
    * The player commits the difference between `amount` and what they already put in.
