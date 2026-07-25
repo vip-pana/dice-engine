@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
   abilitySpec,
   ALL_ABILITY_IDS,
@@ -50,28 +50,48 @@ export function App(): JSX.Element {
         Two columns on a wide screen, stacked on a narrow one. `minmax(0, 720px)` lets the
         game column shrink below its content width instead of forcing a horizontal scroll,
         which a bare `720px` track would do on a tablet.
+
+        On wide the grid is exactly viewport-tall and both columns STRETCH to fill it, so
+        the table and the reference panels reach the bottom of the page instead of ending
+        in dead space. On narrow it keeps its natural height — a fixed-height stack would
+        squeeze the panels into unreadable slivers.
       */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: wide ? 'minmax(0, 720px) minmax(240px, 300px)' : 'minmax(0, 1fr)',
           gap: 24,
-          alignItems: 'start',
+          alignItems: 'stretch',
           maxWidth: 1100,
           margin: '0 auto',
           padding: '1.5rem',
+          // `box-sizing: border-box` so the padding sits INSIDE the 100vh rather than
+          // adding to it — otherwise the page scrolls by exactly the padding.
+          ...(wide ? { height: '100vh', boxSizing: 'border-box' as const } : null),
         }}
       >
-        <main style={{ minWidth: 0 }}>
+        <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <h1 style={{ marginTop: 0 }}>Poker di Dadi</h1>
           <ScoreBar state={state} />
           <BotAutoPlayer state={trueState} dispatch={dispatch} />
-          <Table state={state} dispatch={dispatch} />
+          <Table state={state} dispatch={dispatch} grow={wide} />
           <OutcomeBanner state={state} />
           <Controls state={state} dispatch={dispatch} onNewMatch={() => newMatch()} />
-          <ActionLog log={state.log} />
         </main>
-        <AbilitySidebar state={state} sticky={wide} />
+        {/* Reference column: what the special dice do, then the running log beneath. */}
+        <aside
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            minWidth: 0,
+            minHeight: 0,
+          }}
+        >
+          <AbilitySidebar state={state} />
+          {/* Takes the remaining height, so the log reaches the bottom of the page. */}
+          <ActionLog log={state.log} grow={wide} />
+        </aside>
       </div>
     </div>
   )
@@ -191,21 +211,13 @@ function Stat({
  * every hand, so "what Tu has" would be stale by the next hand. The dice themselves carry
  * the badge that says who got what.
  */
-function AbilitySidebar({
-  state,
-  sticky,
-}: {
-  state: GameState
-  sticky: boolean
-}): JSX.Element {
+function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
   const { ownChance, commonChance, pool } = state.abilityDrops
   const dropsOn = ownChance > 0 || commonChance > 0
 
   return (
-    <aside
+    <section
       style={{
-        position: sticky ? 'sticky' : 'static',
-        top: 24,
         padding: 14,
         borderRadius: 12,
         background: '#0b1220',
@@ -240,7 +252,7 @@ function AbilitySidebar({
           <AbilityCard key={id} id={id} active={dropsOn && pool.includes(id)} />
         ))}
       </div>
-    </aside>
+    </section>
   )
 }
 
@@ -355,15 +367,24 @@ function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
 function Table({
   state,
   dispatch,
+  grow = false,
 }: {
   state: GameState
   dispatch: UseGameDispatch
+  /** Stretch to fill the remaining column height (wide layout only). */
+  grow?: boolean
 }): JSX.Element {
   const primaryLabel = playerLabel(state.primary)
   const humanIsToAct = state.toAct === 'human'
 
   return (
-    <section>
+    <section
+      style={
+        grow
+          ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+          : undefined
+      }
+    >
       <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>
         Primario di mano: <strong>{primaryLabel}</strong> · Fase:{' '}
         <strong>{phaseLabel(state.phase)}</strong>
@@ -371,24 +392,152 @@ function Table({
 
       <RollOffView state={state} />
 
-      <h3 style={{ marginBottom: 6 }}>Dadi comuni</h3>
-      <CommonRow state={state} canSteal={state.phase === 'STEAL' && humanIsToAct} dispatch={dispatch} />
+      {/*
+        Seated like a real table, read top to bottom: the OPPONENT across from you, the
+        shared dice on the felt between you, your own dice nearest to you. That ordering
+        is what makes the steal legible — the commons sit physically between the two
+        hands competing for them.
+      */}
+      <div
+        style={{
+          borderRadius: 16,
+          border: '1px solid #1e293b',
+          background: 'linear-gradient(180deg, #101c2e 0%, #0d1826 55%, #101c2e 100%)',
+          padding: '14px 16px',
+          // When stretching, the panel fills the column and the bands share the extra
+          // height (capped, see Band). `overflow: auto` keeps a tall hand scrollable on a
+          // short viewport instead of spilling out of the panel.
+          ...(grow
+            ? {
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                overflow: 'auto',
+              }
+            : null),
+        }}
+      >
+        <Band grow={grow}>
+          <SeatLabel text="Bot" highlight={state.toAct === 'bot'} />
+          <BotRow state={state} />
+        </Band>
 
-      <h3 style={{ marginBottom: 6 }}>Bot</h3>
-      <BotRow state={state} />
+        <FeltDivider />
 
-      <h3 style={{ marginBottom: 6 }}>I tuoi dadi</h3>
-      <HumanRow state={state} dispatch={dispatch} />
+        <Band grow={grow}>
+          <SeatLabel text="Dadi comuni" muted />
+          <CommonRow
+            state={state}
+            canSteal={state.phase === 'STEAL' && humanIsToAct}
+            dispatch={dispatch}
+          />
+        </Band>
+
+        <FeltDivider />
+
+        <Band grow={grow}>
+          <SeatLabel text="I tuoi dadi" highlight={humanIsToAct} />
+          <HumanRow state={state} dispatch={dispatch} />
+        </Band>
+      </div>
     </section>
   )
 }
 
+/** Small heading above a row of dice. Highlighted when it is that seat's turn to act. */
+function SeatLabel({
+  text,
+  muted = false,
+  highlight = false,
+}: {
+  text: string
+  muted?: boolean
+  highlight?: boolean
+}): JSX.Element {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.8,
+          textTransform: 'uppercase',
+          color: highlight ? '#fbbf24' : muted ? '#64748b' : '#94a3b8',
+        }}
+      >
+        {text}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * One horizontal band of the table (a seat, or the shared felt).
+ *
+ * When the board stretches, bands share the spare height and centre their content — but
+ * they only GROW (flex-grow), never stretch from a zero basis. Sizing them from `0` split
+ * the height into three equal thirds, which on a tall screen flung the rows so far apart
+ * the table stopped reading as one surface. Growing from content height keeps the rows
+ * visually related while still filling the page.
+ */
+function Band({ grow, children }: { grow: boolean; children: ReactNode }): JSX.Element {
+  return (
+    <div
+      style={
+        grow
+          ? {
+              flex: '1 1 auto',
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              // Cap the breathing room so a very tall viewport does not strand the rows
+              // far apart. Roughly two dice tall: enough to feel airy, close enough that
+              // the three bands still read as one table.
+              maxHeight: 140,
+            }
+          : undefined
+      }
+    >
+      {children}
+    </div>
+  )
+}
+
+/** Hairline separating the three bands of the table. */
+function FeltDivider(): JSX.Element {
+  return (
+    <div
+      style={{
+        height: 1,
+        margin: '14px 0',
+        background: 'linear-gradient(90deg, transparent, #1e293b 15%, #1e293b 85%, transparent)',
+      }}
+    />
+  )
+}
+
 function RollOffView({ state }: { state: GameState }): JSX.Element | null {
-  // Show the roll-off dice while deciding, and keep them visible through the hand so the
-  // player remembers who won the right to start.
   if (state.rollOff === null && state.phase !== 'ROLL_OFF') {
     return null
   }
+
+  // Once the hand is under way the roll-off is only a memo of who won the right to
+  // start, so it collapses to one line — the table below is what deserves the space.
+  // The dice stay full-size only while the roll-off IS the current decision.
+  const deciding = state.phase === 'ROLL_OFF'
+
+  if (!deciding && state.rollOff !== null) {
+    return (
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        Tiro iniziale: {state.rollOff.human.value} — {state.rollOff.bot.value} · inizia{' '}
+        <strong style={{ color: '#94a3b8' }}>{playerLabel(state.primary)}</strong>
+      </p>
+    )
+  }
+
   return (
     <div
       style={{
@@ -410,11 +559,6 @@ function RollOffView({ state }: { state: GameState }): JSX.Element | null {
           <DieView value={state.rollOff.human.value} caption="tu" />
           <span style={{ color: '#64748b' }}>vs</span>
           <DieView value={state.rollOff.bot.value} caption="bot" />
-          {state.phase !== 'ROLL_OFF' && (
-            <span style={{ fontSize: 13, color: '#94a3b8' }}>
-              Inizia <strong style={{ color: '#e2e8f0' }}>{playerLabel(state.primary)}</strong>
-            </span>
-          )}
         </>
       )}
     </div>
@@ -434,7 +578,9 @@ function CommonRow({
     return <Placeholder text="Non ancora lanciati" />
   }
   return (
-    <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+    // Left-aligned like the two seat rows: the three bands share one spine so the eye can
+    // compare dice across them. Centring the commons broke that alignment.
+    <div style={{ display: 'flex', gap: 12 }}>
       {state.common.map((die, index) => {
         const taken = state.stolenCommonIndices.includes(index)
         return (
@@ -465,7 +611,7 @@ function BotRow({ state }: { state: GameState }): JSX.Element {
   const blinded = new Set(hand.concealedIndices)
   const live = liveFinalHand(hand) // reuse: own4 + stolen -> Hand, if formed
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
       {hand.own === null ? (
         <Placeholder text="In attesa del lancio" />
       ) : (
@@ -521,7 +667,7 @@ function HumanRow({
   const liveHand: Hand | null = liveFinalHand(hand)
 
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
         {hand.own.map((die, i) => (
           <DieView
@@ -785,23 +931,77 @@ function BettingControls({
 // Action log
 // ---------------------------------------------------------------------------
 
-function ActionLog({ log }: { log: readonly string[] }): JSX.Element {
+/**
+ * Running commentary, in the reference column under the ability catalogue.
+ *
+ * Auto-scrolls to the newest line: in a sidebar the panel is short, so without this the
+ * latest event — the one you actually need — would sit out of sight below the fold.
+ */
+function ActionLog({
+  log,
+  grow = false,
+}: {
+  log: readonly string[]
+  /** Fill the remaining sidebar height instead of sizing to content. */
+  grow?: boolean
+}): JSX.Element {
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const box = boxRef.current
+    if (box !== null) {
+      box.scrollTop = box.scrollHeight
+    }
+  }, [log])
+
   return (
-    <section style={{ marginTop: 24 }}>
-      <h3 style={{ marginBottom: 6 }}>Log</h3>
-      <div
+    <section
+      style={{
+        padding: 14,
+        borderRadius: 12,
+        background: '#0b1220',
+        border: '1px solid #1e293b',
+        minWidth: 0,
+        // Stretching to the bottom of the page: the panel grows, and the scrollable list
+        // inside it grows with it (see maxHeight below).
+        ...(grow
+          ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+          : null),
+      }}
+    >
+      <h2
         style={{
-          maxHeight: 180,
+          margin: '0 0 8px',
+          fontSize: 14,
+          fontWeight: 700,
+          color: '#94a3b8',
+          letterSpacing: 0.3,
+        }}
+      >
+        Log
+      </h2>
+      <div
+        ref={boxRef}
+        style={{
           overflowY: 'auto',
-          background: '#1e293b',
-          borderRadius: 10,
-          padding: '10px 14px',
-          fontSize: 13,
+          fontSize: 12,
           lineHeight: 1.6,
+          // Long log lines must wrap inside the narrow column rather than widen it.
+          overflowWrap: 'anywhere',
+          // Growing: take whatever height the panel has. Otherwise cap it, so a long log
+          // does not push the page down on a stacked/mobile layout.
+          ...(grow ? { flex: 1, minHeight: 0 } : { maxHeight: 260 }),
         }}
       >
         {log.map((line, i) => (
-          <div key={i} style={{ color: i === log.length - 1 ? '#e2e8f0' : '#94a3b8' }}>
+          <div
+            key={i}
+            style={{
+              color: i === log.length - 1 ? '#e2e8f0' : '#64748b',
+              fontWeight: i === log.length - 1 ? 600 : 400,
+              paddingBottom: 3,
+            }}
+          >
             {line}
           </div>
         ))}

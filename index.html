@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Poker di Dadi — Prototipo</title>
+    <style>
+      /*
+        The only document-level styling in the app (everything else is inline styles on
+        components). Without this the browser's default 8px body margin sits outside the
+        full-height layout and makes the page scroll by exactly that much.
+      */
+      body {
+        margin: 0;
+        background: #0f172a;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

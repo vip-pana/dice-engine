@@ -144,6 +144,9 @@ export function DieView(props: DieViewProps): JSX.Element {
         </button>
 
         {spec !== null && (
+          // The ability stays public even on a concealed die — you may know a hidden die
+          // is a D4, just not its face. But it is drawn muted there, so "hidden" stays the
+          // dominant reading and the badge is not mistaken for a live effect.
           <span
             aria-hidden
             style={{
@@ -153,8 +156,8 @@ export function DieView(props: DieViewProps): JSX.Element {
               width: 18,
               height: 18,
               borderRadius: '50%',
-              background: accent,
-              color: '#0f172a',
+              background: concealed ? '#3b2f63' : accent,
+              color: concealed ? '#a78bfa' : '#0f172a',
               fontSize: 11,
               fontWeight: 800,
               lineHeight: '18px',
