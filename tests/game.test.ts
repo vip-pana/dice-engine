@@ -114,6 +114,158 @@ describe('free bet amounts', () => {
   })
 })
 
+describe('a bet can never exceed the bankroll', () => {
+  it('rejects an opening bet larger than the bankroll', () => {
+    const rng = createRng(11)
+    const s = rollOffUntilDecided(createInitialState(), rng)
+    expect(() =>
+      reducer(s, { type: 'OPEN', player: s.primary, amount: 99_999 }, rng),
+    ).toThrow(/exceeds/)
+  })
+
+  it('rejects an opening bet one coin over the bankroll, but allows exactly all-in', () => {
+    const rng = createRng(12)
+    const s = rollOffUntilDecided(createInitialState(), rng)
+    const stack = s.bankroll[s.primary]
+
+    expect(() =>
+      reducer(s, { type: 'OPEN', player: s.primary, amount: stack + 1 }, rng),
+    ).toThrow(/exceeds/)
+
+    const allIn = reducer(s, { type: 'OPEN', player: s.primary, amount: stack }, rng)
+    expect(allIn.bankroll[s.primary]).toBe(0)
+    expect(allIn.pot).toBe(stack)
+  })
+
+  it('rejects a raise beyond the bankroll', () => {
+    const rng = createRng(13)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    const primary = s.primary
+    s = reducer(s, { type: 'OPEN', player: primary, amount: MIN }, rng)
+    expect(() =>
+      reducer(s, { type: 'RAISE', player: otherPlayer(primary), amount: 99_999 }, rng),
+    ).toThrow(/exceeds/)
+  })
+
+  it('caps a bet at the SHORTER stack, so unmatchable chips are never wagered', () => {
+    const rng = createRng(14)
+    let s = rollOffUntilDecided(createInitialState({ startingBankroll: 200 }), rng)
+    const primary = s.primary
+    const shortSeat = otherPlayer(primary)
+
+    // The opponent can only cover 30, so the rich player cannot bet more than that.
+    s = { ...s, bankroll: { ...s.bankroll, [shortSeat]: 30 } }
+    expect(() => reducer(s, { type: 'OPEN', player: primary, amount: 200 }, rng)).toThrow(
+      /exceeds the effective stack/,
+    )
+
+    // Betting exactly the short stack is legal, and both end up all-in for 30 each.
+    const shoved = reducer(s, { type: 'OPEN', player: primary, amount: 30 }, rng)
+    const called = reducer(shoved, { type: 'CALL', player: shortSeat }, rng)
+    expect(called.bankroll[shortSeat]).toBe(0)
+    expect(called.bankroll[primary]).toBe(170)
+  })
+
+  it('a hand played with both players broke skips betting entirely', () => {
+    const rng = createRng(15)
+    // Nobody has chips: the roll-off must deal straight into STEAL, with an empty pot.
+    let s = createInitialState({ startingBankroll: 0 })
+    while (s.phase === 'ROLL_OFF') {
+      s = reducer(s, { type: 'ROLL_OFF' }, rng)
+    }
+    expect(s.phase).toBe('STEAL')
+    expect(s.pot).toBe(0)
+    expect(s.log.some((l) => /senza puntate/.test(l))).toBe(true)
+  })
+
+  it('skips the second betting round when a first-round all-in left nobody with chips', () => {
+    const rng = createRng(16)
+    let s = rollOffUntilDecided(createInitialState({ startingBankroll: 40 }), rng)
+    const primary = s.primary
+    const other = otherPlayer(primary)
+
+    // Both shove everything in the first round.
+    s = reducer(s, { type: 'OPEN', player: primary, amount: 40 }, rng)
+    s = reducer(s, { type: 'CALL', player: other }, rng)
+    expect(s.bankroll.human).toBe(0)
+    expect(s.bankroll.bot).toBe(0)
+
+    // Play through steal + reroll; the second betting round must not be offered.
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
+    s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
+
+    expect(s.phase).not.toBe('SECOND_BET')
+    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
+    expect(s.log.some((l) => /direttamente allo showdown/.test(l))).toBe(true)
+  })
+})
+
+describe('fold (second round only, facing a bet)', () => {
+  /** Drives a fresh match to SECOND_BET with a bet on the table. */
+  function toSecondBetFacingABet(seed: number): { s: GameState; rng: Rng } {
+    const rng = createRng(seed)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
+    s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
+    expect(s.phase).toBe('SECOND_BET')
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    return { s, rng }
+  }
+
+  it('awards the pot AND the Bo3 point to the player who did not fold', () => {
+    const { s, rng } = toSecondBetFacingABet(21)
+    const folder = s.toAct
+    const winner = otherPlayer(folder)
+    const potBefore = s.pot
+    const bankrollBefore = s.bankroll[winner]
+
+    const after = reducer(s, { type: 'FOLD', player: folder }, rng)
+
+    expect(after.bankroll[winner]).toBe(bankrollBefore + potBefore)
+    expect(after.pot).toBe(0)
+    expect(after.score[winner]).toBe(1)
+    expect(after.score[folder]).toBe(0)
+    expect(after.log.some((l) => /si ritira/.test(l))).toBe(true)
+  })
+
+  it('is rejected in the first betting round', () => {
+    const rng = createRng(22)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    expect(() =>
+      reducer(s, { type: 'FOLD', player: otherPlayer(s.primary) }, rng),
+    ).toThrow(/second betting round/)
+  })
+
+  it('is rejected when there is no bet to face', () => {
+    const rng = createRng(23)
+    let s = rollOffUntilDecided(createInitialState(), rng)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
+    s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
+    expect(s.phase).toBe('SECOND_BET')
+    // Nobody has opened yet, so the player to act has nothing to fold to.
+    expect(() => reducer(s, { type: 'FOLD', player: s.toAct }, rng)).toThrow(/no bet to face/)
+  })
+
+  it('cannot fold to your own bet', () => {
+    const { s, rng } = toSecondBetFacingABet(24)
+    // s.aggressor opened; it is the opponent's turn, so the aggressor folding is illegal.
+    expect(() => reducer(s, { type: 'FOLD', player: s.aggressor! }, rng)).toThrow(
+      /not this player to act/,
+    )
+  })
+})
+
 describe('no check, no fold', () => {
   it('rejects CALL before the round is opened (no check)', () => {
     const rng = createRng(5)

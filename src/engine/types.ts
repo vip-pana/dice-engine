@@ -5,9 +5,50 @@
 /** A single die face value. All dice are standard d6. */
 export type DieValue = 1 | 2 | 3 | 4 | 5 | 6
 
-/** A rolled die. Kept as a distinct type so we can attach metadata later without churn. */
+/**
+ * Identifier of a die's special ability (roguelike upgrades).
+ *
+ * Data-driven on purpose: the roll behaviour of each ability lives in ONE table
+ * (ABILITIES in abilities.ts), so adding the Nth ability is a new entry there, not a
+ * new branch scattered across the engine. `null`/absent means a plain d6.
+ *
+ * Naming note: ids are stable strings (not numbers) so saved loadouts stay readable
+ * and portable to GDScript/C# enums-by-name.
+ */
+export type AbilityId =
+  /** Rolls 3 dice and keeps the highest. */
+  | 'STELLA_ESSICCATA'
+  /** A 4-sided die: rolls 1..4 instead of 1..6. */
+  | 'D4'
+  /**
+   * Hides one of the OPPONENT's dice from them until the showdown.
+   *
+   * Unlike every other ability this one changes no value at all — it changes who knows
+   * what. Its effect therefore lives outside AbilitySpec.roll (see `concealedIndices` on
+   * PlayerHandState); the spec entry exists only so it can drop, be named and be drawn.
+   */
+  | 'NERO_DI_SEPPIA'
+
+/**
+ * A rolled die.
+ *
+ * `ability` is the ability of the PHYSICAL die that produced this value; it travels with
+ * the die so the UI can mark it and so a reroll re-applies the same ability. Absent for
+ * plain dice, which keeps every existing `{ value }` literal valid.
+ *
+ * `rolls` records the individual faces an ability produced (e.g. Stella Essiccata's 3 dice)
+ * purely so the UI can *show* the split. It is never read by hand evaluation.
+ */
 export interface Die {
   readonly value: DieValue
+  readonly ability?: AbilityId | undefined
+  readonly rolls?: readonly DieValue[] | undefined
+  /**
+   * Set only on a die that has been MASKED for a particular viewer (see view.ts): its
+   * `value` is a placeholder, not the real face. Never set on the reducer's true state —
+   * if you find it there, something wrote a view back into the engine.
+   */
+  readonly concealed?: boolean | undefined
 }
 
 /**

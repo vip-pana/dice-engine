@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
     "sim": "tsx src/sim/montecarlo.ts",
-    "sim:optimal": "tsx src/sim/montecarlo-optimal.ts"
+    "sim:optimal": "tsx src/sim/montecarlo-optimal.ts",
+    "sim:abilities": "tsx src/sim/montecarlo-abilities.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -3,7 +3,7 @@
 // Still pure data: string-literal unions + readonly structs, portable to GDScript/C#.
 
 import type { Die, EvaluatedHand } from './types'
-import type { OwnDice } from './strategy'
+import type { AbilityDropConfig, Loadout, OwnDice } from './strategy'
 
 /** The two seats at the table. Roles (primary/non-primary) rotate on top of these. */
 export type PlayerId = 'human' | 'bot'
@@ -72,9 +72,18 @@ export interface PlayerHandState {
    * applied physically at the transition into SHOWDOWN (step 7). Null until chosen.
    */
   readonly rerollSelection: readonly number[] | null
+  /**
+   * Own-dice indices THIS player cannot see, because the opponent rolled a Nero di Seppia.
+   *
+   * Concealment is about knowledge, not value: a hidden die still counts in full at the
+   * showdown, and the owner may still reroll it blind. The engine keeps the true value in
+   * `own` — filtering is the VIEWER's job (see viewFor), so the reducer stays a single
+   * source of truth and only the presentation layer is restricted.
+   */
+  readonly concealedIndices: readonly number[]
 }
 
-/** Outcome of a completed hand. Every hand goes to showdown (there is no fold). */
+/** Outcome of a completed hand. There is no fold in the first round; see FoldAction. */
 export type HandOutcome =
   | { readonly kind: 'win'; readonly winner: PlayerId }
   | { readonly kind: 'tie' } // total tie: pot split, hand replayed, no score change
@@ -92,6 +101,24 @@ export interface ShowdownInfo {
 export interface GameState {
   readonly config: BetConfig
   readonly phase: Phase
+
+  /**
+   * Per-seat die loadout: which ability sits on each of that seat's 4 own dice.
+   * Under random drops this is re-rolled at the start of every hand; for a pinned seat
+   * (see `pinnedLoadouts`) it stays fixed for the whole match. Defaults to four plain
+   * dice, which reproduces the base game bit for bit.
+   */
+  readonly loadouts: Readonly<Record<PlayerId, Loadout>>
+
+  /**
+   * Seats whose loadout was supplied explicitly at match creation. Those are never
+   * overwritten by random drops — that is how a test or a balance run pins one side to a
+   * known loadout while the other side keeps drawing randomly.
+   */
+  readonly pinnedLoadouts: Readonly<Record<PlayerId, boolean>>
+
+  /** Random-drop rates for own and common dice. `ownChance: 0` disables drops entirely. */
+  readonly abilityDrops: AbilityDropConfig
 
   /**
    * Seat that holds the primary role this hand — decided by the ROLL_OFF at the start
