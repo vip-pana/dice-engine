@@ -30,13 +30,31 @@ const ORDINARY_SLOTS = OrdinaryRank.FiveOfAKind + 1
  * Ordinary ranks occupy [0, ORDINARY_SLOTS); straights occupy the slots above,
  * ordered by STRAIGHT_PRIORITY. This guarantees any straight beats any ordinary hand.
  */
-function categoryPriority(category: HandCategory): number {
+export function categoryPriority(category: HandCategory): number {
   if (category.kind === 'ordinary') {
     return category.rank
   }
   const straightIndex = STRAIGHT_PRIORITY.indexOf(category.straight)
   return ORDINARY_SLOTS + straightIndex
 }
+
+/**
+ * Every hand category that exists, ordered WEAKEST to STRONGEST.
+ *
+ * Built from the same two sources categoryPriority reads (the OrdinaryRank ladder and
+ * STRAIGHT_PRIORITY), so a new category or a retuned straight order shows up here for
+ * free — this list can never drift out of sync with the comparison rules.
+ *
+ * Exists for presentation (a "which hand beats which" legend); the engine itself never
+ * needs to enumerate categories.
+ */
+export const ALL_HAND_CATEGORIES: readonly HandCategory[] = [
+  ...Array.from({ length: ORDINARY_SLOTS }, (_unused, rank): HandCategory => ({
+    kind: 'ordinary',
+    rank: rank as OrdinaryRank,
+  })),
+  ...STRAIGHT_PRIORITY.map((straight): HandCategory => ({ kind: 'straight', straight })),
+]
 
 /** Counts occurrences of each die value in the hand. */
 function countByValue(values: readonly DieValue[]): Map<DieValue, number> {

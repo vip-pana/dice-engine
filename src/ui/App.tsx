@@ -15,6 +15,7 @@ import {
   type Deck,
   type GameState,
   type Hand,
+  type HandCategory,
   type NewGameOptions,
   type PlayerHandState,
   type Rng,
@@ -25,6 +26,7 @@ import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
 import { DeckPreview } from './components/DeckPreview'
 import { DieView, ABILITY_ACCENT } from './components/DieView'
+import { HandRankingLegend } from './components/HandRankingLegend'
 
 // A single Rng dedicated to the BOT's decision-making, kept separate from the match Rng
 // so the bot's internal sampling never disturbs the dice stream. Randomly seeded so the
@@ -130,7 +132,7 @@ function Match({
             onRebuildDeck={onRebuild}
           />
         </main>
-        {/* Reference column: your deck, what the special dice do, then the running log. */}
+        {/* Reference column: your deck, the rules references (tabbed), then the running log. */}
         <aside
           style={{
             display: 'flex',
@@ -145,7 +147,7 @@ function Match({
             onRebuildDeck={onRebuild}
             matchInProgress={state.phase !== 'MATCH_OVER'}
           />
-          <AbilitySidebar state={state} />
+          <ReferencePanel state={state} grow={wide} />
           {/* Takes the remaining height, so the log reaches the bottom of the page. */}
           <ActionLog log={state.log} grow={wide} />
         </aside>
@@ -335,8 +337,138 @@ function DeckPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Ability legend: the special dice that can turn up, and how often
+// Reference panel: the two static rule references, on tabs
 // ---------------------------------------------------------------------------
+
+const REFERENCE_TABS = ['abilities', 'ranking'] as const
+type ReferenceTab = (typeof REFERENCE_TABS)[number]
+
+const REFERENCE_TAB_LABEL: Record<ReferenceTab, string> = {
+  abilities: 'Dadi speciali',
+  ranking: 'Classifica mani',
+}
+
+/**
+ * Holds the game's two rules references — the special-dice catalogue and the hand ranking
+ * ladder — in one tabbed panel.
+ *
+ * Tabs rather than two stacked panels because the sidebar is height-bound: both references
+ * are tall and fixed-height, and stacking them left ActionLog's `flex: 1` with literally
+ * zero pixels, so the log vanished. One at a time keeps the log readable.
+ *
+ * Both are static reference material you consult and leave, never per-turn state, so the
+ * cost of hiding one is low — and neither is on the critical path of a decision (the dice
+ * themselves carry their ability badge; the live hand has its own "Mano attuale" badge).
+ */
+function ReferencePanel({
+  state,
+  grow = false,
+}: {
+  state: GameState
+  /** Share the bounded sidebar height with the log instead of sizing to content. */
+  grow?: boolean
+}): JSX.Element {
+  const [tab, setTab] = useState<ReferenceTab>('abilities')
+  // Accent follows the active tab so the panel border keeps signalling what you're reading.
+  const accent = tab === 'abilities' ? `${ABILITY_ACCENT}44` : '#1e293b'
+
+  return (
+    <section
+      style={{
+        padding: 14,
+        borderRadius: 12,
+        background: '#0b1220',
+        border: `1px solid ${accent}`,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        // Growing: share the leftover column height with ActionLog rather than taking a
+        // fixed slice. A `maxHeight` here would still be a floor the log has to pay for on
+        // a short viewport — which is how the log got squeezed to zero in the first place.
+        // Flexing with `minHeight: 0` lets BOTH panels shrink and scroll internally, so
+        // neither can starve the other. Not growing (stacked layout): natural height, and
+        // the body caps itself below.
+        ...(grow ? { flex: '1 1 0', minHeight: 0 } : null),
+      }}
+    >
+      <div role="tablist" aria-label="Riferimenti" style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+        {REFERENCE_TABS.map((id) => {
+          const active = id === tab
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(id)}
+              style={{
+                flex: 1,
+                padding: '6px 8px',
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.3,
+                background: active ? '#111c31' : 'transparent',
+                color: active ? (id === 'abilities' ? ABILITY_ACCENT : '#e2e8f0') : '#64748b',
+                border: `1px solid ${active ? '#334155' : 'transparent'}`,
+              }}
+            >
+              {REFERENCE_TAB_LABEL[id]}
+            </button>
+          )
+        })}
+      </div>
+
+      <div
+        style={{
+          overflowY: 'auto',
+          minHeight: 0,
+          ...(grow ? { flex: 1 } : { maxHeight: 340 }),
+        }}
+      >
+        {tab === 'abilities' ? <AbilityReference state={state} /> : <RankingReference state={state} />}
+      </div>
+    </section>
+  )
+}
+
+/**
+ * The hand ranking ladder with live markers for both seats.
+ *
+ * IMPORTANT: it must be fed the human's VIEW of the state (what Match renders), never the
+ * raw state. A Nero di Seppia hides one of your own dice, and viewFor replaces that face
+ * with a placeholder — so the position computed here is an estimate, which is exactly why
+ * the marker is drawn with a "?". Passing the true state would leak the hidden face by
+ * pointing at the real category.
+ */
+function RankingReference({ state }: { state: GameState }): JSX.Element {
+  const humanCategory = categoryOf(state.hands.human)
+  const botCategory = categoryOf(state.hands.bot)
+  const humanUncertain = state.hands.human.own?.some((d) => d.concealed) ?? false
+
+  return (
+    <>
+      <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        {humanCategory === null
+          ? 'Dalla più forte alla più debole. I marker appaiono quando la mano è completa.'
+          : 'Chi sta più in alto vince. A parità di categoria decidono i dadi più alti.'}
+      </p>
+      <HandRankingLegend
+        human={humanCategory}
+        humanUncertain={humanUncertain}
+        bot={botCategory}
+      />
+    </>
+  )
+}
+
+/** Category of a seat's provisional 5-die hand, or null while it is still incomplete. */
+function categoryOf(hand: PlayerHandState): HandCategory | null {
+  const live = liveFinalHand(hand)
+  return live === null ? null : evaluateHand(live).category
+}
 
 /**
  * The catalogue of every special die in the game.
@@ -350,7 +482,7 @@ function DeckPanel({
  * every hand, so "what Tu has" would be stale by the next hand. The dice themselves carry
  * the badge that says who got what.
  */
-function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
+function AbilityReference({ state }: { state: GameState }): JSX.Element {
   const { ownChance, commonChance, pool } = state.abilityDrops
   const dropsOn = ownChance > 0 || commonChance > 0
 
@@ -364,26 +496,7 @@ function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
     deckMode ? inDeck.includes(id) : dropsOn && pool.includes(id)
 
   return (
-    <section
-      style={{
-        padding: 14,
-        borderRadius: 12,
-        background: '#0b1220',
-        border: `1px solid ${ABILITY_ACCENT}44`,
-      }}
-    >
-      <h2
-        style={{
-          margin: '0 0 4px',
-          fontSize: 14,
-          fontWeight: 700,
-          color: ABILITY_ACCENT,
-          letterSpacing: 0.3,
-        }}
-      >
-        Dadi speciali
-      </h2>
-
+    <>
       <p style={{ margin: '0 0 12px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
         {deckMode ? (
           <>
@@ -411,7 +524,7 @@ function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
           />
         ))}
       </div>
-    </section>
+    </>
   )
 }
 

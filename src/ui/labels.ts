@@ -2,6 +2,7 @@ import {
   OrdinaryRank,
   StraightKind,
   type EvaluatedHand,
+  type HandCategory,
   type PlayerId,
 } from '../engine'
 
@@ -23,11 +24,16 @@ const STRAIGHT_LABEL: Record<StraightKind, string> = {
   [StraightKind.SixHigh]: 'Scala di sei',
 }
 
-/** Italian name of a hand's category (e.g. "Full house", "Scala di sei"). */
+/** Italian name of a category (e.g. "Full house", "Scala di sei"). */
+export function categoryName(category: HandCategory): string {
+  return category.kind === 'ordinary'
+    ? ORDINARY_LABEL[category.rank]
+    : STRAIGHT_LABEL[category.straight]
+}
+
+/** Italian name of an evaluated hand's category. */
 export function categoryLabel(hand: EvaluatedHand): string {
-  return hand.category.kind === 'ordinary'
-    ? ORDINARY_LABEL[hand.category.rank]
-    : STRAIGHT_LABEL[hand.category.straight]
+  return categoryName(hand.category)
 }
 
 /** Display name of a seat. */

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ALL_HAND_CATEGORIES,
+  categoryPriority,
   evaluateHand,
   compareHands,
   OrdinaryRank,
@@ -159,5 +161,30 @@ describe('compareHands — invariants', () => {
         expect(forward).toBe((-backward || 0) as -1 | 0 | 1)
       }
     }
+  })
+})
+
+describe('ALL_HAND_CATEGORIES', () => {
+  it('is ordered weakest to strongest, with no gaps or duplicates', () => {
+    const priorities = ALL_HAND_CATEGORIES.map(categoryPriority)
+    expect(priorities).toEqual(priorities.map((_p, i) => i))
+  })
+
+  it('covers every ordinary rank and every straight exactly once', () => {
+    // Guards the legend against silently missing a category added to the enums later.
+    const ordinary = ALL_HAND_CATEGORIES.filter((c) => c.kind === 'ordinary')
+    const straights = ALL_HAND_CATEGORIES.filter((c) => c.kind === 'straight')
+    expect(ordinary.length).toBe(OrdinaryRank.FiveOfAKind + 1)
+    expect(straights.length).toBe(Object.keys(StraightKind).length)
+  })
+
+  it('ranks every straight above every ordinary hand', () => {
+    const worstStraight = Math.min(
+      ...ALL_HAND_CATEGORIES.filter((c) => c.kind === 'straight').map(categoryPriority),
+    )
+    const bestOrdinary = Math.max(
+      ...ALL_HAND_CATEGORIES.filter((c) => c.kind === 'ordinary').map(categoryPriority),
+    )
+    expect(worstStraight).toBeGreaterThan(bestOrdinary)
   })
 })
