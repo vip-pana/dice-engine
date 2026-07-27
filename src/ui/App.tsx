@@ -1,34 +1,81 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
-  abilitySpec,
   ALL_ABILITY_IDS,
   chooseAction,
   evaluateHand,
   createRng,
+  DECK_SIZE,
   DEFAULT_ABILITY_DROPS,
+  HAND_SIZE,
+  deckSpecials,
   maxBetFor,
+  rollBotDeck,
   viewFor,
   type AbilityId,
+  type Deck,
   type GameState,
   type Hand,
+  type NewGameOptions,
   type PlayerHandState,
+  type Rng,
 } from '../engine'
 import { useGame } from './useGame'
 import { categoryLabel, playerLabel } from './labels'
-import { DieView, ABILITY_ACCENT, ACCENT_BY_KIND } from './components/DieView'
+import { AbilityCard } from './components/AbilityCard'
+import { DeckBuilder } from './components/DeckBuilder'
+import { DeckPreview } from './components/DeckPreview'
+import { DieView, ABILITY_ACCENT } from './components/DieView'
 
 // A single Rng dedicated to the BOT's decision-making, kept separate from the match Rng
 // so the bot's internal sampling never disturbs the dice stream. Randomly seeded so the
 // bot does not make the exact same reroll choices on every page load.
 const botBrainRng = createRng(Math.floor(Math.random() * 2 ** 31))
 
+/**
+ * Gates the deck builder in front of the match.
+ *
+ * `Match` mounts only once a deck exists, so `useGame`'s eager state initializer always
+ * sees a real deck — no `GameState | null` has to be threaded through the whole tree. The
+ * `key` forces a fresh mount (and thus a fresh match) whenever the deck changes.
+ */
 export function App(): JSX.Element {
-  // Neither seat is pinned, so both draw fresh random specials every hand at the default
-  // drop rates. Pass `loadouts` here instead to pin a seat to a fixed set for playtesting.
-  // No seed: every reload deals a different match. Pass one to replay a specific game.
-  const { state: trueState, dispatch, newMatch } = useGame(undefined, {
-    abilityDrops: DEFAULT_ABILITY_DROPS,
+  const [deck, setDeck] = useState<Deck | null>(null)
+
+  if (deck === null) {
+    return <DeckBuilder onConfirm={setDeck} />
+  }
+  return <Match key={deckKey(deck)} deck={deck} onRebuild={() => setDeck(null)} />
+}
+
+/** Stable identity for a deck, used to remount Match when the player rebuilds. */
+function deckKey(deck: Deck): string {
+  return deck.map((id) => id ?? '-').join('|')
+}
+
+/**
+ * Match options for a chosen deck.
+ *
+ * A factory, not a plain object: the bot's deck is rolled from the MATCH Rng so that one
+ * seed reproduces the whole match including both decks. `commonChance` stays live — common
+ * dice belong to nobody and are never part of a deck — while `ownChance` is 0 because own
+ * dice now come from the deck (deck mode ignores it either way; 0 is honesty, not effect).
+ */
+function optionsForDeck(deck: Deck): (rng: Rng) => NewGameOptions {
+  return (rng) => ({
+    decks: { human: deck, bot: rollBotDeck(rng, deck) },
+    abilityDrops: { ...DEFAULT_ABILITY_DROPS, ownChance: 0 },
   })
+}
+
+function Match({
+  deck,
+  onRebuild,
+}: {
+  deck: Deck
+  onRebuild: () => void
+}): JSX.Element {
+  // No seed: every match deals differently. Pass one to replay a specific game.
+  const { state: trueState, dispatch, newMatch } = useGame(undefined, optionsForDeck(deck))
   const wide = useIsWide()
 
   // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
@@ -76,9 +123,14 @@ export function App(): JSX.Element {
           <BotAutoPlayer state={trueState} dispatch={dispatch} />
           <Table state={state} dispatch={dispatch} grow={wide} />
           <OutcomeBanner state={state} />
-          <Controls state={state} dispatch={dispatch} onNewMatch={() => newMatch()} />
+          <Controls
+            state={state}
+            dispatch={dispatch}
+            onNewMatch={() => newMatch()}
+            onRebuildDeck={onRebuild}
+          />
         </main>
-        {/* Reference column: what the special dice do, then the running log beneath. */}
+        {/* Reference column: your deck, what the special dice do, then the running log. */}
         <aside
           style={{
             display: 'flex',
@@ -88,6 +140,11 @@ export function App(): JSX.Element {
             minHeight: 0,
           }}
         >
+          <DeckPanel
+            deck={deck}
+            onRebuildDeck={onRebuild}
+            matchInProgress={state.phase !== 'MATCH_OVER'}
+          />
           <AbilitySidebar state={state} />
           {/* Takes the remaining height, so the log reaches the bottom of the page. */}
           <ActionLog log={state.log} grow={wide} />
@@ -196,6 +253,88 @@ function Stat({
 }
 
 // ---------------------------------------------------------------------------
+// Deck panel: what you brought to this match, and the way back to the builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Your deck, always visible during the match.
+ *
+ * Unlike the ability catalogue below it, this IS a per-seat inventory — and it can be,
+ * because a deck is fixed for the whole match. It answers "what did I bring?" without
+ * having to remember the builder screen.
+ *
+ * The rebuild button lives here rather than only in the end-of-match controls: composing a
+ * deck is the one setup choice in the game, so the way back to it should always be at hand.
+ */
+function DeckPanel({
+  deck,
+  onRebuildDeck,
+  matchInProgress,
+}: {
+  deck: Deck
+  onRebuildDeck: () => void
+  /** Whether abandoning now would throw away a live match. */
+  matchInProgress: boolean
+}): JSX.Element {
+  const specials = deckSpecials(deck)
+  const drawChance = Math.round((HAND_SIZE / DECK_SIZE) * 100)
+  // Two-step only while a match is live: rebuilding then discards real progress, and a
+  // single mis-click in a sidebar button should not cost the player their game.
+  const [confirming, setConfirming] = useState(false)
+
+  return (
+    <section
+      style={{
+        padding: 14,
+        borderRadius: 12,
+        background: '#0b1220',
+        border: '1px solid #1e293b',
+        minWidth: 0,
+      }}
+    >
+      <h2
+        style={{
+          margin: '0 0 4px',
+          fontSize: 14,
+          fontWeight: 700,
+          color: '#94a3b8',
+          letterSpacing: 0.3,
+        }}
+      >
+        Il tuo mazzo
+      </h2>
+      <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        {specials.length === 0
+          ? `${DECK_SIZE} dadi normali. Peschi ${HAND_SIZE} dadi a ogni mano.`
+          : `${specials.length} special${specials.length === 1 ? 'e' : 'i'} su ${DECK_SIZE} dadi — ognuno esce in circa ${drawChance}% delle mani.`}
+      </p>
+
+      <DeckPreview deck={deck} variant="compact" />
+
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {confirming ? (
+          <>
+            <SecondaryButton onClick={onRebuildDeck}>Sì, abbandona</SecondaryButton>
+            <SecondaryButton onClick={() => setConfirming(false)}>Annulla</SecondaryButton>
+          </>
+        ) : (
+          <SecondaryButton
+            onClick={() => (matchInProgress ? setConfirming(true) : onRebuildDeck())}
+          >
+            Cambia mazzo
+          </SecondaryButton>
+        )}
+      </div>
+      <p style={{ margin: '6px 0 0', fontSize: 10, color: '#475569', lineHeight: 1.4 }}>
+        {confirming
+          ? 'La partita in corso verrà abbandonata.'
+          : 'Cambiare mazzo inizia una nuova partita.'}
+      </p>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Ability legend: the special dice that can turn up, and how often
 // ---------------------------------------------------------------------------
 
@@ -214,6 +353,15 @@ function Stat({
 function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
   const { ownChance, commonChance, pool } = state.abilityDrops
   const dropsOn = ownChance > 0 || commonChance > 0
+
+  // In deck mode `ownChance` does nothing, so printing it would state a rule that is not in
+  // force. Read the MODE, and mark abilities active by what is actually in the deck.
+  const deck = state.decks.human
+  const deckMode = state.ownDiceSource.human.kind === 'deck' && deck !== null
+  const inDeck = deckMode ? deckSpecials(deck) : []
+  const drawChance = Math.round((HAND_SIZE / DECK_SIZE) * 100)
+  const isActive = (id: AbilityId): boolean =>
+    deckMode ? inDeck.includes(id) : dropsOn && pool.includes(id)
 
   return (
     <section
@@ -237,7 +385,13 @@ function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
       </h2>
 
       <p style={{ margin: '0 0 12px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-        {dropsOn ? (
+        {deckMode ? (
+          <>
+            Peschi {HAND_SIZE} dadi su {DECK_SIZE} dal tuo mazzo a ogni mano: ogni speciale
+            nel mazzo esce in circa {drawChance}% delle mani.
+            {commonChance > 0 && <> Tra i comuni può uscirne uno al {pct(commonChance)}.</>}
+          </>
+        ) : dropsOn ? (
           <>
             Ogni tipo può uscire al massimo una volta: {pct(ownChance)} in mano,{' '}
             {pct(commonChance)} tra i comuni. Si ripescano a ogni mano.
@@ -249,62 +403,15 @@ function AbilitySidebar({ state }: { state: GameState }): JSX.Element {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {ALL_ABILITY_IDS.map((id) => (
-          <AbilityCard key={id} id={id} active={dropsOn && pool.includes(id)} />
+          <AbilityCard
+            key={id}
+            id={id}
+            active={isActive(id)}
+            inactiveNote={deckMode ? 'non nel tuo mazzo' : 'non in gioco'}
+          />
         ))}
       </div>
     </section>
-  )
-}
-
-/** One entry in the catalogue: icon, name, rules text. Dimmed when it cannot drop. */
-function AbilityCard({ id, active }: { id: AbilityId; active: boolean }): JSX.Element | null {
-  const spec = abilitySpec(id)
-  if (spec === null) {
-    return null
-  }
-  const accent = ACCENT_BY_KIND[spec.kind]
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 10,
-        padding: '9px 10px',
-        borderRadius: 9,
-        background: '#111c31',
-        border: `1px solid ${active ? `${accent}33` : '#1e293b'}`,
-        opacity: active ? 1 : 0.45,
-      }}
-      title={active ? spec.description : `${spec.description} (non in gioco)`}
-    >
-      <span
-        aria-hidden
-        style={{
-          flexShrink: 0,
-          width: 26,
-          height: 26,
-          borderRadius: '50%',
-          background: accent,
-          color: '#0f172a',
-          fontSize: 15,
-          fontWeight: 800,
-          lineHeight: '26px',
-          textAlign: 'center',
-        }}
-      >
-        {spec.icon}
-      </span>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{spec.name}</div>
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
-          {spec.description}
-        </div>
-        <div style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
-          {spec.kind === 'malus' ? 'Malus' : 'Bonus'}
-          {active ? '' : ' — non in gioco'}
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -748,18 +855,23 @@ function Controls({
   state,
   dispatch,
   onNewMatch,
+  onRebuildDeck,
 }: {
   state: GameState
   dispatch: UseGameDispatch
   onNewMatch: () => void
+  onRebuildDeck: () => void
 }): JSX.Element {
   const rowStyle = { display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' as const }
 
   if (state.phase === 'MATCH_OVER') {
-    // The winner headline is shown by OutcomeBanner; here we only offer a restart.
+    // The winner headline is shown by OutcomeBanner; here we only offer a restart. "Nuova
+    // partita" keeps the deck (and re-rolls the bot's); "Cambia mazzo" goes back to the
+    // builder, since a deck is fixed for the whole match by design.
     return (
       <div style={rowStyle}>
         <PrimaryButton onClick={onNewMatch}>Nuova partita</PrimaryButton>
+        <SecondaryButton onClick={onRebuildDeck}>Cambia mazzo</SecondaryButton>
       </div>
     )
   }

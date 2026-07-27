@@ -4,6 +4,20 @@
 
 import type { Die, EvaluatedHand } from './types'
 import type { AbilityDropConfig, Loadout, OwnDice } from './strategy'
+import type { Deck } from './deck'
+
+/**
+ * Where a seat's 4 own dice come from. Explicit and per-seat, rather than inferred from
+ * which config fields happen to be set: implicit precedence is exactly the trap `loadouts`
+ * fell into by serving as both input and output.
+ */
+export type OwnDiceSource =
+  /** A fixed loadout, supplied at match creation and held all match. */
+  | { readonly kind: 'pinned' }
+  /** Re-rolled every hand from `abilityDrops` (rollRandomLoadout). */
+  | { readonly kind: 'drops' }
+  /** Drawn every hand as HAND_SIZE of the seat's DECK_SIZE-die deck. */
+  | { readonly kind: 'deck' }
 
 /** The two seats at the table. Roles (primary/non-primary) rotate on top of these. */
 export type PlayerId = 'human' | 'bot'
@@ -103,21 +117,43 @@ export interface GameState {
   readonly phase: Phase
 
   /**
-   * Per-seat die loadout: which ability sits on each of that seat's 4 own dice.
-   * Under random drops this is re-rolled at the start of every hand; for a pinned seat
-   * (see `pinnedLoadouts`) it stays fixed for the whole match. Defaults to four plain
-   * dice, which reproduces the base game bit for bit.
+   * THE 4 DICE THIS SEAT IS PLAYING RIGHT NOW — which ability sits on each of them.
+   *
+   * For a `pinned` seat this is fixed input config, held for the whole match. For a
+   * `drops` or `deck` seat it is an OUTPUT: the result of that hand's draw, overwritten at
+   * the start of every hand. Read `ownDiceSource` to know which. Defaults to four plain
+   * dice, reproducing the base game bit for bit.
    */
   readonly loadouts: Readonly<Record<PlayerId, Loadout>>
+
+  /** Where each seat's 4 own dice come from this match. See OwnDiceSource. */
+  readonly ownDiceSource: Readonly<Record<PlayerId, OwnDiceSource>>
+
+  /**
+   * Each seat's 10-die deck, or null when that seat is not in deck mode.
+   *
+   * `Deck | null` rather than an optional field because `exactOptionalPropertyTypes` is on
+   * and optional-vs-undefined gets fiddly across the record.
+   */
+  readonly decks: Readonly<Record<PlayerId, Deck | null>>
 
   /**
    * Seats whose loadout was supplied explicitly at match creation. Those are never
    * overwritten by random drops — that is how a test or a balance run pins one side to a
    * known loadout while the other side keeps drawing randomly.
+   *
+   * Kept as a mirror of `ownDiceSource[seat].kind === 'pinned'`: it is public API that
+   * predates the mode field, and a derived boolean is cheaper than migrating its callers.
    */
   readonly pinnedLoadouts: Readonly<Record<PlayerId, boolean>>
 
-  /** Random-drop rates for own and common dice. `ownChance: 0` disables drops entirely. */
+  /**
+   * Random-drop rates for own and common dice. `ownChance: 0` disables own-dice drops.
+   *
+   * `ownChance` is IGNORED for a seat in `deck` mode (its dice come from the deck), but the
+   * value is kept rather than zeroed so the UI can still read the config. `commonChance`
+   * applies in every mode — common dice belong to nobody and are never part of a deck.
+   */
   readonly abilityDrops: AbilityDropConfig
 
   /**

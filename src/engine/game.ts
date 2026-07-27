@@ -18,6 +18,7 @@ import {
   type Loadout,
   type OwnDice,
 } from './strategy'
+import { assertValidDeck, drawHandFromDeck, type Deck } from './deck'
 import type { Rng } from './rng'
 import type { Die, Hand } from './types'
 import type { Action } from './actions'
@@ -29,6 +30,7 @@ import {
   type BetConfig,
   type GameState,
   type HandOutcome,
+  type OwnDiceSource,
   type PlayerHandState,
   type PlayerId,
   type ShowdownInfo,
@@ -61,11 +63,33 @@ export interface NewGameOptions {
    */
   readonly loadouts?: Partial<Record<PlayerId, Loadout>>
   /**
-   * Random ability drops. When set, every hand re-rolls the loadout of each seat that is
-   * NOT pinned in `loadouts`, and the common dice draw their own abilities. Defaults to
-   * no drops (base game).
+   * Per-seat 10-die decks. A seat with a deck draws 4 of its 10 dice fresh every hand,
+   * ignoring `abilityDrops.ownChance`.
+   *
+   * Mutually exclusive with `loadouts` for the same seat — supplying both is a caller bug
+   * and throws, rather than being silently resolved by a precedence rule.
+   */
+  readonly decks?: Partial<Record<PlayerId, Deck>>
+  /**
+   * Random ability drops. When set, every hand re-rolls the loadout of each seat that has
+   * neither a pinned loadout nor a deck, and the common dice draw their own abilities.
+   * Defaults to no drops (base game).
    */
   readonly abilityDrops?: AbilityDropConfig
+}
+
+/** Which source a seat's own dice come from, given the options supplied. */
+function ownDiceSourceFor(options: NewGameOptions, seat: PlayerId): OwnDiceSource {
+  const deck = options.decks?.[seat]
+  const loadout = options.loadouts?.[seat]
+  assert(
+    deck === undefined || loadout === undefined,
+    `${seat} was given both a deck and a pinned loadout; pick one`,
+  )
+  if (deck !== undefined) {
+    return { kind: 'deck' }
+  }
+  return loadout !== undefined ? { kind: 'pinned' } : { kind: 'drops' }
 }
 
 /** Creates the initial match state at the start of hand 1 (ROLL_OFF phase). */
@@ -74,6 +98,23 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
   const bankroll = options.startingBankroll ?? DEFAULT_STARTING_BANKROLL
   const primary = options.firstPrimary ?? 'human'
 
+  const ownDiceSource = {
+    human: ownDiceSourceFor(options, 'human'),
+    bot: ownDiceSourceFor(options, 'bot'),
+  }
+  const decks = {
+    human: options.decks?.human ?? null,
+    bot: options.decks?.bot ?? null,
+  }
+  // The engine validates, not just the UI: an illegal deck must be impossible to play,
+  // whatever the caller is.
+  for (const seat of ['human', 'bot'] as const) {
+    const deck = decks[seat]
+    if (deck !== null) {
+      assertValidDeck(deck, seat)
+    }
+  }
+
   return {
     config,
     phase: 'ROLL_OFF',
@@ -81,9 +122,11 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
       human: options.loadouts?.human ?? PLAIN_LOADOUT,
       bot: options.loadouts?.bot ?? PLAIN_LOADOUT,
     },
+    ownDiceSource,
+    decks,
     pinnedLoadouts: {
-      human: options.loadouts?.human !== undefined,
-      bot: options.loadouts?.bot !== undefined,
+      human: ownDiceSource.human.kind === 'pinned',
+      bot: ownDiceSource.bot.kind === 'pinned',
     },
     abilityDrops: options.abilityDrops ?? NO_ABILITY_DROPS,
     primary,
@@ -477,17 +520,30 @@ function handStr(state: GameState, seat: PlayerId): string {
 }
 
 /**
- * Loadouts for the hand about to start: a pinned seat keeps the loadout it was created
- * with, an unpinned seat draws a fresh random one from the match Rng.
+ * Loadouts for the hand about to start, per seat's configured source.
+ *
+ * Drawn human-then-bot so the Rng stream has a predictable shape. Note the two random
+ * modes consume different numbers of draws, so a seed does not produce the same dice
+ * across modes — expected, they are different games.
  */
 function drawLoadouts(state: GameState, rng: Rng): Readonly<Record<PlayerId, Loadout>> {
   return {
-    human: state.pinnedLoadouts.human
-      ? state.loadouts.human
-      : rollRandomLoadout(rng, state.abilityDrops),
-    bot: state.pinnedLoadouts.bot
-      ? state.loadouts.bot
-      : rollRandomLoadout(rng, state.abilityDrops),
+    human: drawLoadoutFor(state, 'human', rng),
+    bot: drawLoadoutFor(state, 'bot', rng),
+  }
+}
+
+function drawLoadoutFor(state: GameState, seat: PlayerId, rng: Rng): Loadout {
+  switch (state.ownDiceSource[seat].kind) {
+    case 'pinned':
+      return state.loadouts[seat]
+    case 'deck': {
+      const deck = state.decks[seat]
+      assert(deck !== null, `${seat} is in deck mode but has no deck`)
+      return drawHandFromDeck(rng, deck)
+    }
+    case 'drops':
+      return rollRandomLoadout(rng, state.abilityDrops)
   }
 }
 

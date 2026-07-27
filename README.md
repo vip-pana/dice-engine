@@ -46,8 +46,9 @@ tarabile, non è un bug delle regole.
 
 ## Come giocare
 
-`pnpm dev`, poi apri il link (di solito http://localhost:5173). Giochi un match
-Best of 3 contro il bot. Ogni mano segue la sequenza fissa:
+`pnpm dev`, poi apri il link (di solito http://localhost:5173). Prima componi il
+tuo **mazzo** (vedi sotto), poi giochi un match Best of 3 contro il bot. Ogni mano
+segue la sequenza fissa:
 
 1. **Tiro iniziale** — tu e il bot tirate un dado: chi fa più alto è il primario
    (pareggio → si ritira).
@@ -56,9 +57,29 @@ Best of 3 contro il bot. Ogni mano segue la sequenza fissa:
 3. **Furto** — clicca un dado comune per rubarlo (il primario ruba per primo).
 4. **Scelta rilancio** — seleziona quali dei tuoi 4 dadi rilanciare (tutti tranne
    il rubato), poi conferma.
-5. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede o
-   rilancia. Non si può né passare né lasciare.
+5. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
+   rilancia o **lascia la mano** (il fold è possibile solo qui, e solo se stai
+   affrontando una puntata: chi lascia cede piatto e punto).
 6. **Showdown** — si confrontano le mani; il vincitore incassa il piatto.
+
+Se nessuno dei due ha più monete da puntare, le finestre di scommessa vengono
+**saltate**: la mano si gioca comunque per il punto del Bo3.
 
 I dadi del bot sono sempre visibili. Il badge accanto ai dadi mostra la categoria
 della mano attuale in tempo reale.
+
+### Mazzo
+
+Prima del match scegli i **10 dadi** del tuo mazzo, che resta fisso per tutta la
+partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
+
+- Puoi mettere **al massimo un dado di ogni tipo speciale**; gli slot restanti
+  sono d6 normali. Quindi in una mano non trovi mai due speciali identici.
+- Un dado speciale nel mazzo esce in circa **40%** delle mani (4 su 10).
+- Il bot riceve un mazzo generato con lo **stesso numero di dadi speciali** del
+  tuo. Nota che un malus (il D4) conta come uno speciale, quindi sceglierlo ti
+  costa due volte.
+- I **dadi comuni** non fanno parte di nessun mazzo: continuano a poter uscire
+  speciali col loro tasso.
+- A fine match: *Nuova partita* tiene il mazzo (e ripesca quello del bot),
+  *Cambia mazzo* torna alla schermata di composizione.
