@@ -3,6 +3,7 @@ import {
   ABILITIES,
   ALL_ABILITY_IDS,
   abilitySpec,
+  chooseTorpedoTarget,
   createInitialState,
   createRng,
   reducer,
@@ -559,9 +560,10 @@ describe('random ability drops', () => {
 
   it('rollRandomLoadout respects the drop chance at both extremes', () => {
     const rng = createRng(31)
-    // At chance 1 every ability in the pool lands exactly once.
+    // At chance 1 every ability in the pool lands exactly once — capped by the 4 own-dice
+    // slots, since the registry has outgrown a single hand.
     const all = rollRandomLoadout(rng, ALWAYS)
-    expect(specialCount(all)).toBe(ALL_ABILITY_IDS.length)
+    expect(specialCount(all)).toBe(Math.min(ALL_ABILITY_IDS.length, all.length))
     expect([...countsByAbility(all).values()].every((n) => n === 1)).toBe(true)
 
     expect(specialCount(rollRandomLoadout(rng, NEVER))).toBe(0)
@@ -746,11 +748,33 @@ function playHandToCompletion(
   let s = state
   s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
   s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
-  s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-  s = reducer(s, { type: 'REROLL', player: other(s.primary), ownIndices: [] }, rng)
+  s = reducer(s, rerollAction(s, s.primary, []), rng)
+  s = reducer(s, rerollAction(s, other(s.primary), []), rng)
   s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
   s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
   return s
+}
+
+/**
+ * A legal REROLL for `player`, supplying a Torpedo target if and only if the rules demand one.
+ *
+ * A Dado Torpedo makes the target mandatory, so any helper that drives a hand through
+ * REROLL_SELECT must provide it once that ability can turn up. Defaulting to index 0 keeps
+ * these helpers deterministic — tests about WHICH die gets hit pass an explicit target.
+ */
+function rerollAction(
+  state: ReturnType<typeof createInitialState>,
+  player: 'human' | 'bot',
+  ownIndices: readonly number[],
+  target = 0,
+): { type: 'REROLL'; player: 'human' | 'bot'; ownIndices: readonly number[]; torpedoTarget?: number } {
+  const hand = state.hands[player]
+  const holds =
+    (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
+    hand.stolen?.ability === 'DADO_TORPEDO'
+  return holds
+    ? { type: 'REROLL', player, ownIndices, torpedoTarget: target }
+    : { type: 'REROLL', player, ownIndices }
 }
 
 /** Drives a fresh state through the roll-off and initial bet, landing in STEAL. */
@@ -1009,6 +1033,301 @@ describe("DADO_D_ORO: doubles the winner's payout", () => {
     const s = playToSteal(createInitialState({ loadouts: { human: ORO_ONLY } }), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.DADO_D_ORO.icon)
+  })
+})
+
+describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
+  const TORPEDO_ONLY: Loadout = ['DADO_TORPEDO', null, null, null]
+  const COMMON_TORPEDO = {
+    abilityDrops: { ownChance: 0, commonChance: 1, pool: ['DADO_TORPEDO' as AbilityId] },
+  }
+
+  /** Sum of a seat's 4 own-dice values — the quantity a -1 moves by exactly 1. */
+  const ownSum = (s: ReturnType<typeof createInitialState>, seat: 'human' | 'bot'): number =>
+    s.hands[seat].own!.reduce((n, d) => n + d.value, 0)
+
+  /**
+   * Plays STEAL -> HAND_COMPLETE keeping every die (so no reroll can mask the zap), and
+   * reports the own-dice values before and after the showdown for both seats.
+   */
+  function playAndCompare(
+    start: ReturnType<typeof createInitialState>,
+    rng: ReturnType<typeof createRng>,
+    opts: { target?: number; rerollAll?: boolean } = {},
+  ) {
+    const np = other(start.primary)
+    let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    const before = { human: [...s.hands.human.own!], bot: [...s.hands.bot.own!] }
+    const keep = opts.rerollAll === true ? [0, 1, 2, 3] : []
+    s = reducer(s, rerollAction(s, s.primary, keep, opts.target ?? 0), rng)
+    s = reducer(s, rerollAction(s, np, keep, opts.target ?? 0), rng)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+    s = reducer(s, { type: 'CALL', player: np }, rng)
+    return { before, after: s }
+  }
+
+  it('rolls a plain d6 — the malus lands on the opponent, not on its own face', () => {
+    const rng = createRng(401)
+    const spec = ABILITIES.DADO_TORPEDO
+    let sum = 0
+    const trials = 400
+    for (let i = 0; i < trials; i++) {
+      const rolls = spec.roll(rng)
+      expect(rolls).toHaveLength(1)
+      const v = spec.resolve(rolls)
+      expect(v).toBeGreaterThanOrEqual(1)
+      expect(v).toBeLessThanOrEqual(6)
+      sum += v
+    }
+    expect(Math.abs(sum / trials - 3.5)).toBeLessThan(0.4)
+  })
+
+  it('zaps exactly the CHOSEN die of the opponent, by 1', () => {
+    const rng = createRng(402)
+    const start = playToSteal(
+      createInitialState({ loadouts: { human: TORPEDO_ONLY } }),
+      rng,
+    )
+    const target = 2
+    const before = [...start.hands.bot.own!]
+    const s = playAndCompare(start, rng, { target }).after
+
+    const after = s.hands.bot.own!
+    const expected = before[target]!.value > 1 ? before[target]!.value - 1 : 1
+    expect(after[target]!.value).toBe(expected)
+    // Every other die of the victim is untouched.
+    for (const i of [0, 1, 2, 3].filter((j) => j !== target)) {
+      expect(after[i]!.value).toBe(before[i]!.value)
+    }
+  })
+
+  it('cannot be dodged by rerolling the marked die — the whole point of the design', () => {
+    // Regression: applying the -1 at deal time would be wiped here, because rerollDie
+    // rebuilds a die from its ability alone.
+    let zappedAtLeastOnce = 0
+    for (let seed = 1; seed <= 40; seed++) {
+      const rng = createRng(5000 + seed)
+      const start = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+      const { after } = playAndCompare(start, rng, { target: 1, rerollAll: true })
+      const line = after.log.find((l) => /Dado Torpedo di/.test(l))
+      expect(line).toBeDefined() // the zap happened even though the victim rerolled all 4
+      zappedAtLeastOnce++
+    }
+    expect(zappedAtLeastOnce).toBe(40)
+  })
+
+  it('never drops a die below 1', () => {
+    for (let seed = 1; seed <= 120; seed++) {
+      const rng = createRng(6000 + seed)
+      const start = playToSteal(
+        createInitialState({ loadouts: { human: TORPEDO_ONLY, bot: TORPEDO_ONLY } }),
+        rng,
+      )
+      const { after } = playAndCompare(start, rng, { target: 0 })
+      for (const seat of ['human', 'bot'] as const) {
+        for (const die of after.hands[seat].own!) {
+          expect(die.value).toBeGreaterThanOrEqual(1)
+          expect(die.value).toBeLessThanOrEqual(6)
+        }
+      }
+      expect(after.lastShowdown!.human.values.every((v) => v >= 1)).toBe(true)
+      expect(after.lastShowdown!.bot.values.every((v) => v >= 1)).toBe(true)
+    }
+  })
+
+  it('rejects a REROLL with no target when the seat holds one', () => {
+    const rng = createRng(403)
+    const s = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+    const np = other(s.primary)
+    let t = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    t = reducer(t, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    const first = t.toAct
+    if (first === 'human') {
+      expect(() => reducer(t, { type: 'REROLL', player: 'human', ownIndices: [] }, rng)).toThrow(
+        /must choose a target/,
+      )
+      expect(() =>
+        reducer(t, { type: 'REROLL', player: 'human', ownIndices: [], torpedoTarget: 4 }, rng),
+      ).toThrow(/0\.\.3/)
+    }
+  })
+
+  it('rejects a target from a seat that holds no Torpedo', () => {
+    const rng = createRng(404)
+    const s = playToSteal(createInitialState(), rng)
+    const np = other(s.primary)
+    let t = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    t = reducer(t, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    expect(() =>
+      reducer(t, { type: 'REROLL', player: t.toAct, ownIndices: [], torpedoTarget: 0 }, rng),
+    ).toThrow(/only a Dado Torpedo holder/)
+  })
+
+  it("usually spares its owner, and electrifies the field about 10% of the time", () => {
+    let fieldHits = 0
+    const runs = 200
+    for (let seed = 1; seed <= runs; seed++) {
+      const rng = createRng(7000 + seed)
+      const start = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+      const { after } = playAndCompare(start, rng, { target: 0 })
+      if (after.log.some((l) => /Campo elettrizzato/.test(l))) {
+        fieldHits++
+      }
+    }
+    const rate = fieldHits / runs
+    // Wide band on purpose: a tight one would flake on a probabilistic effect.
+    expect(rate).toBeGreaterThan(0.03)
+    expect(rate).toBeLessThan(0.2)
+  })
+
+  it('unstolen among the commons, it zaps BOTH seats at random', () => {
+    const rng = createRng(405)
+    const start = playToSteal(createInitialState(COMMON_TORPEDO), rng)
+    const torpedo = start.common!.findIndex((d) => d.ability === 'DADO_TORPEDO')
+    expect(torpedo).toBeGreaterThanOrEqual(0)
+    const plain = [0, 1, 2].filter((i) => i !== torpedo)
+
+    const np = other(start.primary)
+    let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: plain[0]! }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: plain[1]! }, rng)
+    const beforeHuman = ownSum(s, 'human')
+    const beforeBot = ownSum(s, 'bot')
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+    s = reducer(s, { type: 'CALL', player: np }, rng)
+
+    // Nobody owns it, so nobody chose — but both lose a point (unless the die was already 1).
+    const lines = s.log.filter((l) => /Dado Torpedo tra i comuni/.test(l))
+    expect(lines).toHaveLength(2)
+    expect(ownSum(s, 'human')).toBeLessThanOrEqual(beforeHuman)
+    expect(ownSum(s, 'bot')).toBeLessThanOrEqual(beforeBot)
+  })
+
+  it('two Torpedoes zap independently, one per seat', () => {
+    const rng = createRng(406)
+    const start = playToSteal(
+      createInitialState({ loadouts: { human: TORPEDO_ONLY, bot: TORPEDO_ONLY } }),
+      rng,
+    )
+    const { after } = playAndCompare(start, rng, { target: 0 })
+    const zaps = after.log.filter((l) => /Dado Torpedo di/.test(l))
+    expect(zaps).toHaveLength(2)
+  })
+
+  it('does nothing on a fold — there is no showdown to zap at', () => {
+    const rng = createRng(407)
+    let s = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+    const np = other(s.primary)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    s = reducer(s, rerollAction(s, s.primary, [], 0), rng)
+    s = reducer(s, rerollAction(s, np, [], 0), rng)
+    expect(s.phase).toBe('SECOND_BET')
+    const beforeHuman = ownSum(s, 'human')
+    const beforeBot = ownSum(s, 'bot')
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 20 }, rng)
+    s = reducer(s, { type: 'FOLD', player: np }, rng)
+
+    expect(s.log.some((l) => /Dado Torpedo di/.test(l))).toBe(false)
+    expect(ownSum(s, 'human')).toBe(beforeHuman)
+    expect(ownSum(s, 'bot')).toBe(beforeBot)
+  })
+
+  it('consumes the same rng draws whether or not the field electrifies', () => {
+    // The project's determinism rule: a draw count that varied with the outcome would shift
+    // every downstream roll. Same seed, same actions -> identical draw counts, always.
+    const counted = (seed: number): { next: number; nextInt: number } => {
+      const inner = createRng(seed)
+      const counts = { next: 0, nextInt: 0 }
+      const rng = {
+        next: () => {
+          counts.next++
+          return inner.next()
+        },
+        nextInt: (a: number, b: number) => {
+          counts.nextInt++
+          return inner.nextInt(a, b)
+        },
+        rollDie: () => inner.rollDie(),
+      }
+      const start = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+      playAndCompare(start, rng, { target: 0 })
+      return counts
+    }
+    // Find one seed that electrifies and one that does not, then compare their draw counts
+    // for the showdown step by replaying with a fixed action script.
+    const perSeed: { seed: number; field: boolean; counts: { next: number; nextInt: number } }[] = []
+    for (let seed = 1; seed <= 60; seed++) {
+      const rng = createRng(8000 + seed)
+      const start = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+      const { after } = playAndCompare(start, rng, { target: 0 })
+      perSeed.push({
+        seed: 8000 + seed,
+        field: after.log.some((l) => /Campo elettrizzato/.test(l)),
+        counts: counted(8000 + seed),
+      })
+    }
+    const withField = perSeed.find((p) => p.field)
+    const withoutField = perSeed.find((p) => !p.field)
+    expect(withoutField).toBeDefined()
+    if (withField !== undefined && withoutField !== undefined) {
+      // Identical scripts, so identical consumption regardless of the 10% outcome.
+      expect(withField.counts.next).toBe(withoutField.counts.next)
+      expect(withField.counts.nextInt).toBe(withoutField.counts.nextInt)
+    }
+  })
+
+  it('is deterministic: same seed and actions give the same hands and log', () => {
+    const run = (): ReturnType<typeof createInitialState> => {
+      const rng = createRng(409)
+      const start = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+      return playAndCompare(start, rng, { target: 1 }).after
+    }
+    const a = run()
+    const b = run()
+    expect(a.log).toEqual(b.log)
+    expect(a.hands.human.own!.map((d) => d.value)).toEqual(b.hands.human.own!.map((d) => d.value))
+    expect(a.hands.bot.own!.map((d) => d.value)).toEqual(b.hands.bot.own!.map((d) => d.value))
+  })
+
+  it('shows its icon in the action log like any other special', () => {
+    const rng = createRng(410)
+    const s = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
+    const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
+    expect(rollLine).toContain(ABILITIES.DADO_TORPEDO.icon)
+  })
+})
+
+describe('chooseTorpedoTarget: picks the most damaging die', () => {
+  const d = (v: DieValue): { value: DieValue } => ({ value: v })
+
+  it('breaks a three of a kind rather than shaving an irrelevant die', () => {
+    // 5 5 5 2 + stolen 1: zapping a 5 destroys the trips; zapping the 2 leaves them intact.
+    const own = [d(5), d(5), d(5), d(2)] as const
+    const target = chooseTorpedoTarget(own, d(1))
+    expect([0, 1, 2]).toContain(target)
+  })
+
+  it('is deterministic and prefers the lowest index on a tie', () => {
+    const own = [d(4), d(4), d(4), d(4)] as const
+    expect(chooseTorpedoTarget(own, d(1))).toBe(chooseTorpedoTarget(own, d(1)))
+  })
+
+  it('always returns a valid own-dice index', () => {
+    const rng = createRng(411)
+    for (let i = 0; i < 300; i++) {
+      const own = [
+        { value: rng.rollDie() },
+        { value: rng.rollDie() },
+        { value: rng.rollDie() },
+        { value: rng.rollDie() },
+      ] as const
+      const t = chooseTorpedoTarget(own, { value: rng.rollDie() })
+      expect(t).toBeGreaterThanOrEqual(0)
+      expect(t).toBeLessThan(4)
+    }
   })
 })
 

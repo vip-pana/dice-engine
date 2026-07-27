@@ -8,12 +8,13 @@
 // when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
 // hand.ts oblivious to the roguelike layer entirely.
 //
-// Two abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// Three abilities need more than a face, so their spec below is a plain-d6 stub and the real
 // effect lives in the reducer, where the state it acts on exists:
 //   - NERO_DI_SEPPIA moves INFORMATION -> applyConcealment in game.ts
 //   - DADO_D_ORO moves COINS           -> hasGoldenPayout in game.ts
-// Both are named here so the pattern is discoverable from the registry. A new ability that
-// only decides a face still needs nothing but an entry in this table.
+//   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
+// All three are named here so the pattern is discoverable from the registry. A new ability
+// that only decides a face still needs nothing but an entry in this table.
 
 import type { AbilityId, Die, DieValue } from './types'
 import type { Rng } from './rng'
@@ -128,6 +129,24 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6 — it never helps you win the hand, only what winning pays. The
     // payout is applied by the reducer at resolveHand time (see hasGoldenPayout in game.ts),
     // because AbilitySpec is only allowed to decide faces.
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
+  DADO_TORPEDO: {
+    id: 'DADO_TORPEDO',
+    name: 'Dado Torpedo',
+    description:
+      "Scegli un dado dell'avversario: allo showdown perde 1. Il 10% delle volte elettrizza il campo e ne perde uno anche a te. Tra i comuni colpisce entrambi a caso.",
+    icon: '⚡',
+    // A malus: it damages a die, so it must read violet like the D4 and never as a reward.
+    // Note the die it sits on is a normal d6 — the malus is inflicted on the OPPONENT.
+    kind: 'malus',
+    // Not ownOnly: an unstolen common Torpedo zaps both seats, so it has a real effect with
+    // no owner and must not be filtered out of the commons.
+    // Value-wise a plain d6. Its power is a -1 on someone else's die, applied by the reducer
+    // at showdown time (see applyTorpedoes in game.ts), because AbilitySpec is only allowed
+    // to decide faces — and because applying it any earlier would let a reroll undo it.
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,

@@ -25,7 +25,7 @@ import { categoryLabel, playerLabel } from './labels'
 import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
 import { DeckPreview } from './components/DeckPreview'
-import { DieView, ABILITY_ACCENT, GOLD_ACCENT } from './components/DieView'
+import { DieView, ABILITY_ACCENT, ACCENT_BY_KIND, GOLD_ACCENT } from './components/DieView'
 import { HandRankingLegend } from './components/HandRankingLegend'
 
 // A single Rng dedicated to the BOT's decision-making, kept separate from the match Rng
@@ -576,6 +576,16 @@ function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
         Tu: <strong>{categoryLabel(sd.human)}</strong> [{sd.human.values.join(' ')}] · Bot:{' '}
         <strong>{categoryLabel(sd.bot)}</strong> [{sd.bot.values.join(' ')}]
       </div>
+      {torpedoNotes(state).map((line) => (
+        // A face that differs from what was on the table a second ago is the single most
+        // confusing thing the showdown can show. Say why, where it cannot be missed.
+        <div
+          key={line}
+          style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: ACCENT_BY_KIND.malus }}
+        >
+          ⚡ {line}
+        </div>
+      ))}
       {goldenPayoutNote(state) !== null && (
         // A doubled pot is the most surprising thing that can happen to the bankroll, and
         // the log line explaining it scrolls away. Repeat it where it cannot be missed.
@@ -585,6 +595,28 @@ function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
       )}
     </section>
   )
+}
+
+/**
+ * The engine's own Dado Torpedo lines for the hand just finished.
+ *
+ * Reads the log for the same reason goldenPayoutNote does — the reducer already worded what
+ * it did, and recomputing here could disagree with the values actually shown.
+ *
+ * A wider window than the payout note: the zap lines are emitted BEFORE the post-reroll dice
+ * line, the showdown line, and possibly a payout and a match-over line, so they sit further
+ * back. Returns every match, since two Torpedoes (or an electrified field) produce more than
+ * one line.
+ */
+const TORPEDO_LOG_WINDOW = 8
+
+function torpedoNotes(state: GameState): readonly string[] {
+  // Matches the RESULT lines only. The aim line from REROLL_SELECT ("punta il Dado Torpedo
+  // sul dado N") also mentions the ability and sits within this window, but it describes an
+  // intention, not damage — showing it in the outcome banner would double-report the effect.
+  return state.log
+    .slice(-TORPEDO_LOG_WINDOW)
+    .filter((l) => /Dado Torpedo (di|tra i comuni)|Campo elettrizzato/.test(l))
 }
 
 /**
@@ -621,6 +653,16 @@ function Table({
 }): JSX.Element {
   const primaryLabel = playerLabel(state.primary)
   const humanIsToAct = state.toAct === 'human'
+
+  // A Dado Torpedo is aimed at a BOT die but confirmed from the human row, so the choice
+  // lives here, in the nearest common parent of the two rows.
+  const aiming = state.phase === 'REROLL_SELECT' && humanIsToAct && humanHoldsTorpedo(state)
+  const [torpedoTarget, setTorpedoTarget] = useState<number | null>(null)
+
+  // Drop a stale aim when the hand moves on, so last hand's target cannot leak into the next.
+  useEffect(() => {
+    if (!aiming) setTorpedoTarget(null)
+  }, [aiming, state.handNumber])
 
   return (
     <section
@@ -666,7 +708,12 @@ function Table({
       >
         <Band grow={grow}>
           <SeatLabel text="Bot" highlight={state.toAct === 'bot'} />
-          <BotRow state={state} />
+          <BotRow
+            state={state}
+            aiming={aiming}
+            torpedoTarget={torpedoTarget}
+            onAim={setTorpedoTarget}
+          />
         </Band>
 
         <FeltDivider />
@@ -684,7 +731,12 @@ function Table({
 
         <Band grow={grow}>
           <SeatLabel text="I tuoi dadi" highlight={humanIsToAct} />
-          <HumanRow state={state} dispatch={dispatch} />
+          <HumanRow
+            state={state}
+            dispatch={dispatch}
+            aiming={aiming}
+            torpedoTarget={torpedoTarget}
+          />
         </Band>
       </div>
     </section>
@@ -848,7 +900,18 @@ function CommonRow({
   )
 }
 
-function BotRow({ state }: { state: GameState }): JSX.Element {
+function BotRow({
+  state,
+  aiming = false,
+  torpedoTarget = null,
+  onAim,
+}: {
+  state: GameState
+  /** The human holds a Torpedo and is choosing which of these dice to zap. */
+  aiming?: boolean
+  torpedoTarget?: number | null
+  onAim?: (index: number) => void
+}): JSX.Element {
   const hand = state.hands.bot
   // Bot dice are always visible (open information) — including one the bot itself cannot
   // see, which is exactly what a landed Nero di Seppia buys us. Those get an ink marker
@@ -868,6 +931,11 @@ function BotRow({ state }: { state: GameState }): JSX.Element {
               ability={die.ability}
               rolls={die.rolls}
               blindedToOpponent={blinded.has(i)}
+              // Only the 4 own dice are targetable — the stolen die is fixed, as everywhere
+              // else in the game.
+              selected={aiming && torpedoTarget === i}
+              caption={torpedoTarget === i ? 'bersaglio ⚡' : undefined}
+              onClick={aiming && onAim !== undefined ? () => onAim(i) : undefined}
             />
           ))}
           {hand.stolen ? (
@@ -885,9 +953,14 @@ function BotRow({ state }: { state: GameState }): JSX.Element {
 function HumanRow({
   state,
   dispatch,
+  aiming = false,
+  torpedoTarget = null,
 }: {
   state: GameState
   dispatch: UseGameDispatch
+  /** A Torpedo target must be chosen before the reroll can be confirmed. */
+  aiming?: boolean
+  torpedoTarget?: number | null
 }): JSX.Element {
   const hand = state.hands.human
   const selecting = state.phase === 'REROLL_SELECT' && state.toAct === 'human'
@@ -946,10 +1019,33 @@ function HumanRow({
           <span style={{ fontSize: 13, color: '#94a3b8' }}>
             Selezionati da rilanciare: {selected.length} / 4 (il dado rubato resta fisso)
           </span>
+          {aiming && (
+            <div style={{ marginTop: 4 }}>
+              <Hint
+                text={
+                  torpedoTarget === null
+                    ? '⚡ Dado Torpedo: clicca un dado del Bot da elettrizzare.'
+                    : `⚡ Bersaglio: dado ${torpedoTarget + 1} del Bot — perderà 1 allo showdown.`
+                }
+              />
+            </div>
+          )}
           <div style={{ marginTop: 6 }}>
             <PrimaryButton
+              // The engine ASSERTS that a Torpedo holder picks a target, so block the click
+              // rather than let it throw: the UI anticipates the rule, it does not own it.
+              disabled={aiming && torpedoTarget === null}
               onClick={() => {
-                dispatch({ type: 'REROLL', player: 'human', ownIndices: selected })
+                dispatch(
+                  aiming && torpedoTarget !== null
+                    ? {
+                        type: 'REROLL',
+                        player: 'human',
+                        ownIndices: selected,
+                        torpedoTarget,
+                      }
+                    : { type: 'REROLL', player: 'human', ownIndices: selected },
+                )
                 setSelected([])
               }}
             >
@@ -1323,6 +1419,20 @@ function clamp(n: number, lo: number, hi: number): number {
 // ---------------------------------------------------------------------------
 
 type UseGameDispatch = ReturnType<typeof useGame>['dispatch']
+
+/**
+ * Whether the human holds a Dado Torpedo — among their own dice or as their stolen die.
+ *
+ * Mirrors the reducer's `seatHolds`, which is the authority: this only decides whether to
+ * OFFER the aiming UI. The engine asserts the rule regardless of what the UI does.
+ */
+function humanHoldsTorpedo(state: GameState): boolean {
+  const hand = state.hands.human
+  return (
+    (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
+    hand.stolen?.ability === 'DADO_TORPEDO'
+  )
+}
 
 function liveFinalHand(hand: PlayerHandState): Hand | null {
   if (hand.own === null || hand.stolen === null) return null

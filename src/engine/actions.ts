@@ -48,6 +48,15 @@ export interface RerollAction {
   readonly type: 'REROLL'
   readonly player: PlayerId
   readonly ownIndices: readonly number[]
+  /**
+   * Index (0..3) of the OPPONENT's own die to zap with a Dado Torpedo.
+   *
+   * Required if and only if this player holds a Torpedo — the reducer asserts both ways, so
+   * a client can neither skip the choice nor zap without the die. Rides on this action
+   * rather than getting its own phase: the choice belongs to the same decision point as the
+   * reroll, and the state machine stays untouched.
+   */
+  readonly torpedoTarget?: number | undefined
 }
 
 /** Advance from HAND_COMPLETE to the next hand (or reveal MATCH_OVER). */

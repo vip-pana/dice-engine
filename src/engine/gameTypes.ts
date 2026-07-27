@@ -95,6 +95,15 @@ export interface PlayerHandState {
    * source of truth and only the presentation layer is restricted.
    */
   readonly concealedIndices: readonly number[]
+  /**
+   * Index (0..3) into the OPPONENT's own dice that this seat's Dado Torpedo will zap, or
+   * null when this seat has no Torpedo (or has not chosen yet).
+   *
+   * Chosen during REROLL_SELECT but applied at the showdown (see applyTorpedoes): the split
+   * is what makes the -1 unavoidable, since a reroll rebuilds a die from its ability alone
+   * and would otherwise wipe the effect for free.
+   */
+  readonly torpedoTarget: number | null
 }
 
 /** Outcome of a completed hand. There is no fold in the first round; see FoldAction. */

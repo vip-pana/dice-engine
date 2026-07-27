@@ -37,6 +37,19 @@ export type AbilityId =
    * left unstolen among the commons it doubles for whoever wins.
    */
   | 'DADO_D_ORO'
+  /**
+   * Subtracts 1 from a die of the opponent's hand, chosen by this die's owner.
+   *
+   * The first ability that changes a VALUE, and someone else's at that — so like the two
+   * above its effect cannot live in AbilitySpec.roll. Two moments, deliberately split (see
+   * applyTorpedoes in game.ts): the owner picks the victim die during REROLL_SELECT, and
+   * the -1 lands at the showdown. Applying it earlier would let the victim reroll the
+   * zapped die and undo it for free, since a reroll rebuilds the die from its ability alone.
+   *
+   * Also the first ability that needs a player DECISION; the choice is stored as
+   * `torpedoTarget` on PlayerHandState.
+   */
+  | 'DADO_TORPEDO'
 
 /**
  * A rolled die.

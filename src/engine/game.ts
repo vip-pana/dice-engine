@@ -20,7 +20,7 @@ import {
 } from './strategy'
 import { assertValidDeck, drawHandFromDeck, type Deck } from './deck'
 import type { Rng } from './rng'
-import type { AbilityId, Die, Hand } from './types'
+import type { AbilityId, Die, DieValue, Hand } from './types'
 import type { Action } from './actions'
 import {
   DEFAULT_BET_CONFIG,
@@ -41,7 +41,14 @@ import {
 // ---------------------------------------------------------------------------
 
 function emptyHandState(): PlayerHandState {
-  return { own: null, stolen: null, committed: 0, rerollSelection: null, concealedIndices: [] }
+  return {
+    own: null,
+    stolen: null,
+    committed: 0,
+    rerollSelection: null,
+    concealedIndices: [],
+    torpedoTarget: null,
+  }
 }
 
 export interface NewGameOptions {
@@ -260,7 +267,7 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
     case 'STEAL':
       return handleSteal(state, action.player, action.commonIndex)
     case 'REROLL':
-      return handleReroll(state, action.player, action.ownIndices, rng)
+      return handleReroll(state, action.player, action.ownIndices, action.torpedoTarget, rng)
     case 'NEXT_HAND':
       return handleNextHand(state)
   }
@@ -539,6 +546,19 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
  * effect, so any "applies to both" rule stops holding. Shared by the two abilities with a
  * table-wide form — NERO_DI_SEPPIA (blinds both) and DADO_D_ORO (doubles for whoever wins).
  */
+/**
+ * Whether `seat` owns a die carrying `ability` — among its 4 own dice or as its stolen die.
+ *
+ * The stolen die counts: taking a special from the commons is the intended way to acquire
+ * one, so an ability must work the same whether it was dealt or stolen.
+ */
+function seatHolds(state: GameState, seat: PlayerId, ability: AbilityId): boolean {
+  const hand = state.hands[seat]
+  return (
+    (hand.own ?? []).some((d) => d.ability === ability) || hand.stolen?.ability === ability
+  )
+}
+
 function unclaimedCommonIndex(state: GameState, ability: AbilityId): number | null {
   if (state.common === null) {
     return null
@@ -678,11 +698,26 @@ function handleReroll(
   state: GameState,
   player: PlayerId,
   ownIndices: readonly number[],
+  torpedoTarget: number | undefined,
   rng: Rng,
 ): GameState {
   assert(state.phase === 'REROLL_SELECT', 'REROLL only allowed in REROLL_SELECT')
   assert(state.toAct === player, 'not this player to choose reroll')
   assert(state.hands[player].rerollSelection === null, 'reroll already chosen')
+
+  // The Torpedo's victim is picked here but zapped at the showdown. Required if and only if
+  // this seat holds one: demanding it stops a client from silently forfeiting the effect,
+  // and rejecting it otherwise stops one from zapping without the die.
+  const holdsTorpedo = seatHolds(state, player, 'DADO_TORPEDO')
+  if (holdsTorpedo) {
+    assert(torpedoTarget !== undefined, 'a Dado Torpedo must choose a target die')
+    assert(
+      Number.isInteger(torpedoTarget) && torpedoTarget >= 0 && torpedoTarget < 4,
+      'torpedo target must be an opponent own-dice index 0..3',
+    )
+  } else {
+    assert(torpedoTarget === undefined, 'only a Dado Torpedo holder may choose a target')
+  }
 
   const unique = [...new Set(ownIndices)]
   assert(unique.length === ownIndices.length, 'duplicate reroll indices')
@@ -693,13 +728,24 @@ function handleReroll(
   assert(unique.length <= MAX_REROLL, `at most ${MAX_REROLL} own dice may be rerolled`)
   // All 4 own dice may be rerolled; only the stolen die is fixed (and is not indexable here).
 
-  let next = setHand(state, player, { rerollSelection: unique })
+  let next = setHand(state, player, {
+    rerollSelection: unique,
+    torpedoTarget: torpedoTarget ?? null,
+  })
   next = withLog(
     next,
     unique.length > 0
       ? `${labelOf(player)} rilancerà ${unique.length} dad${unique.length === 1 ? 'o' : 'i'}.`
       : `${labelOf(player)} tiene tutti i dadi.`,
   )
+  if (torpedoTarget !== undefined) {
+    // Announce the choice, not the damage: the victim may still reroll that die, and the
+    // value it ends up losing is only known at the showdown.
+    next = withLog(
+      next,
+      `${labelOf(player)} punta il Dado Torpedo sul dado ${torpedoTarget + 1} di ${labelOf(otherPlayer(player))}.`,
+    )
+  }
 
   const nonPrimary = otherPlayer(state.primary)
   if (player === state.primary) {
@@ -761,9 +807,104 @@ function finalHandOf(hand: PlayerHandState, rng: Rng): Hand {
   return [own[0], own[1], own[2], own[3], hand.stolen]
 }
 
+/** Chance that a Torpedo electrifies the whole field, zapping its own owner too. */
+const TORPEDO_FIELD_CHANCE = 0.1
+
+/** A die with 1 subtracted, floored at 1. */
+function zapDie(die: Die): Die {
+  // Floored by hand: DieValue is a compile-time union only, every producer casts with `as`,
+  // and nothing downstream clamps. A 0 would reach evaluateHand and break handScore, whose
+  // base-7 encoding documents "die values are 1..6".
+  const value = (die.value > 1 ? die.value - 1 : 1) as DieValue
+  return { ...die, value }
+}
+
+/** Replaces one own-die (index 0..3) of a 5-die hand, leaving the stolen die untouched. */
+function withZappedOwn(hand: Hand, index: number): Hand {
+  const zapped = zapDie(hand[index]!)
+  const next = [hand[0], hand[1], hand[2], hand[3], hand[4]]
+  next[index] = zapped
+  return [next[0]!, next[1]!, next[2]!, next[3]!, next[4]!]
+}
+
+/**
+ * Applies every Dado Torpedo in play to the two FINAL hands.
+ *
+ * Runs at the showdown, after the rerolls, which is what makes the -1 unavoidable — see the
+ * ability's note in types.ts. Works on the local hands rather than on state because at this
+ * point the final hands exist only as locals; goToShowdown persists them right after.
+ *
+ * Two sources, mirroring NERO_DI_SEPPIA:
+ *  - HELD by a seat: that seat CHOSE the victim die during REROLL_SELECT (torpedoTarget),
+ *    and a 10% "electrified field" costs the owner a random die of their own too.
+ *  - UNSTOLEN among the commons: it belongs to nobody, so there is nobody to choose. Each
+ *    seat loses a random die.
+ *
+ * Rng discipline: per Torpedo the SAME draws are consumed whatever the outcome — the field
+ * roll, then the owner's own target index even when the field does not trigger. A draw count
+ * that varied with the outcome would shift the downstream stream and break seeded replay
+ * (same rule as drawAbilitySlots in strategy.ts).
+ */
+function applyTorpedoes(
+  hands: { human: Hand; bot: Hand },
+  state: GameState,
+  rng: Rng,
+): { hands: { human: Hand; bot: Hand }; logs: readonly string[] } {
+  let next = { ...hands }
+  const logs: string[] = []
+
+  for (const seat of ['human', 'bot'] as const) {
+    if (!seatHolds(state, seat, 'DADO_TORPEDO')) {
+      continue
+    }
+    const victim = otherPlayer(seat)
+    const target = state.hands[seat].torpedoTarget
+    // Always drawn, in this order, so the stream does not depend on either outcome.
+    const electrifies = rng.next() < TORPEDO_FIELD_CHANCE
+    const selfIndex = rng.nextInt(0, 3)
+
+    if (target !== null) {
+      const before = next[victim][target]!.value
+      next = { ...next, [victim]: withZappedOwn(next[victim], target) }
+      logs.push(
+        `Dado Torpedo di ${labelOf(seat)}: il dado ${target + 1} di ${labelOf(victim)} scende da ${before} a ${next[victim][target]!.value}.`,
+      )
+    }
+    if (electrifies) {
+      const before = next[seat][selfIndex]!.value
+      next = { ...next, [seat]: withZappedOwn(next[seat], selfIndex) }
+      logs.push(
+        `Campo elettrizzato! Anche il dado ${selfIndex + 1} di ${labelOf(seat)} scende da ${before} a ${next[seat][selfIndex]!.value}.`,
+      )
+    }
+  }
+
+  // An unclaimed common Torpedo has no owner, so nobody chose: a random die each.
+  if (unclaimedCommonIndex(state, 'DADO_TORPEDO') !== null) {
+    for (const seat of ['human', 'bot'] as const) {
+      const index = rng.nextInt(0, 3)
+      const before = next[seat][index]!.value
+      next = { ...next, [seat]: withZappedOwn(next[seat], index) }
+      logs.push(
+        `Dado Torpedo tra i comuni: il dado ${index + 1} di ${labelOf(seat)} scende da ${before} a ${next[seat][index]!.value}.`,
+      )
+    }
+  }
+
+  return { hands: next, logs }
+}
+
 function goToShowdown(state: GameState, rng: Rng): GameState {
-  const humanHand = finalHandOf(state.hands.human, rng)
-  const botHand = finalHandOf(state.hands.bot, rng)
+  const rerolled = {
+    human: finalHandOf(state.hands.human, rng),
+    bot: finalHandOf(state.hands.bot, rng),
+  }
+
+  // Zap AFTER the rerolls: applying a Torpedo any earlier would let the victim reroll the
+  // marked die and wipe the -1 for free, since a reroll rebuilds a die from its ability.
+  const zapped = applyTorpedoes(rerolled, state, rng)
+  const humanHand = zapped.hands.human
+  const botHand = zapped.hands.bot
 
   // Persist the rerolled own dice back into hand state so the UI can show final dice.
   const humanOwn: OwnDice = [humanHand[0], humanHand[1], humanHand[2], humanHand[3]]
@@ -789,6 +930,11 @@ function goToShowdown(state: GameState, rng: Rng): GameState {
   // what makes a Nero di Seppia last "until the end of the hand" and no longer.
   next = setHand(next, 'human', { own: humanOwn, concealedIndices: [] })
   next = setHand(next, 'bot', { own: botOwn, concealedIndices: [] })
+  // Torpedo lines come BEFORE the dice line, which already shows the reduced values: an
+  // unexplained face that differs from what was on the table reads as a bug.
+  for (const line of zapped.logs) {
+    next = withLog(next, line)
+  }
   // Log the post-reroll dice so ability splits on rerolled dice are visible too. Safe to
   // print in full: nothing is concealed any more.
   next = withLog(next, `Dopo il rilancio — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
@@ -828,11 +974,7 @@ function describeShowdown(
  * case `own`/`stolen` are null and only the table source can apply.
  */
 function goldenPayoutSource(state: GameState, winner: PlayerId): 'held' | 'table' | null {
-  const hand = state.hands[winner]
-  const held =
-    (hand.own ?? []).some((d) => d.ability === 'DADO_D_ORO') ||
-    hand.stolen?.ability === 'DADO_D_ORO'
-  if (held) {
+  if (seatHolds(state, winner, 'DADO_D_ORO')) {
     return 'held'
   }
   return unclaimedCommonIndex(state, 'DADO_D_ORO') !== null ? 'table' : null

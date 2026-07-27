@@ -1,6 +1,6 @@
 import { evaluateHand, compareHands } from './hand'
 import { ALL_ABILITY_IDS, abilitySpec, rerollDie, rollDieWithAbility } from './abilities'
-import type { AbilityId, Die, Hand } from './types'
+import type { AbilityId, Die, DieValue, Hand } from './types'
 import type { Rng } from './rng'
 
 /**
@@ -252,6 +252,37 @@ export function chooseRerollIndices(
   }
 
   return bestReroll
+}
+
+/**
+ * Picks which of the victim's 4 own dice a Dado Torpedo should zap: the one whose -1 hurts
+ * the victim's hand most.
+ *
+ * Scores each candidate with `handScore`, which is monotonic with compareHands (asserted in
+ * tests/strategy.test.ts), so "lowest resulting score" really is "weakest resulting hand".
+ * That matters because the damage is not about the face value: taking 1 off a die that
+ * breaks a full house costs far more than taking 1 off a lone 6.
+ *
+ * Ties go to the lowest index, so the choice is deterministic and testable. Feed this the
+ * victim's VISIBLE dice (a view): a die concealed by a Nero di Seppia must not inform it.
+ */
+export function chooseTorpedoTarget(victimOwn: OwnDice, victimStolen: Die): number {
+  let bestIndex = 0
+  let bestScore = Infinity
+
+  for (let i = 0; i < victimOwn.length; i++) {
+    const die = victimOwn[i]!
+    // Same floor as the reducer's zapDie: a 1 cannot drop to 0.
+    const value = (die.value > 1 ? die.value - 1 : 1) as DieValue
+    const after = victimOwn.map((d, j) => (j === i ? { ...d, value } : d))
+    const score = handScore([after[0]!, after[1]!, after[2]!, after[3]!, victimStolen])
+    if (score < bestScore) {
+      bestScore = score
+      bestIndex = i
+    }
+  }
+
+  return bestIndex
 }
 
 /**

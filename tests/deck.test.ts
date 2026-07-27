@@ -269,11 +269,25 @@ describe('deck mode in a match', () => {
     rng: Rng,
   ): ReturnType<typeof createInitialState> {
     const other = (p: 'human' | 'bot'): 'human' | 'bot' => (p === 'human' ? 'bot' : 'human')
+    // A Dado Torpedo makes the reroll's target mandatory, so supply one when the seat holds
+    // it. Fixed index 0 so the helper stays deterministic.
+    const reroll = (
+      s0: ReturnType<typeof createInitialState>,
+      player: 'human' | 'bot',
+    ): Parameters<typeof reducer>[1] => {
+      const hand = s0.hands[player]
+      const holds =
+        (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
+        hand.stolen?.ability === 'DADO_TORPEDO'
+      return holds
+        ? { type: 'REROLL', player, ownIndices: [], torpedoTarget: 0 }
+        : { type: 'REROLL', player, ownIndices: [] }
+    }
     let s = state
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: other(s.primary), ownIndices: [] }, rng)
+    s = reducer(s, reroll(s, s.primary), rng)
+    s = reducer(s, reroll(s, other(s.primary)), rng)
     if (s.phase === 'SECOND_BET') {
       s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
       s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)

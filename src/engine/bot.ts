@@ -5,7 +5,12 @@
 // All betting thresholds are NAMED CONSTANTS grouped in BOT_TUNING, so they are easy to
 // find and re-balance during playtest. The bot is deterministic given the Rng.
 
-import { chooseStolenDie, chooseRerollIndices, handScore } from './strategy'
+import {
+  chooseStolenDie,
+  chooseRerollIndices,
+  chooseTorpedoTarget,
+  handScore,
+} from './strategy'
 import type { Rng } from './rng'
 import type { Hand } from './types'
 import type { Action } from './actions'
@@ -186,7 +191,30 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
     throw new Error('[bot] reroll requested before steal')
   }
   const indices = chooseRerollIndices(h.own, h.stolen, rng)
+
+  // Holding a Torpedo makes the target mandatory (the reducer asserts it), so it is chosen
+  // here in the same action. `state` is already the filtered view, so a die the bot cannot
+  // see cannot inform the choice.
+  //
+  // Note the bot picks its victim well, but chooseRerollIndices above does NOT know the bot's
+  // own hand may be zapped by an opponent Torpedo — the same blind spot it has for the Nero
+  // di Seppia and the Dado d'Oro. Teaching the reroll heuristic about pending effects is a
+  // separate change.
+  const victim = otherPlayer(player)
+  const victimHand = state.hands[victim]
+  if (holdsTorpedo(h) && victimHand.own !== null && victimHand.stolen !== null) {
+    const target = chooseTorpedoTarget(victimHand.own, victimHand.stolen)
+    return { type: 'REROLL', player, ownIndices: indices, torpedoTarget: target }
+  }
   return { type: 'REROLL', player, ownIndices: indices }
+}
+
+/** Whether this hand carries a Dado Torpedo, among its own dice or as its stolen die. */
+function holdsTorpedo(hand: GameState['hands'][PlayerId]): boolean {
+  return (
+    (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
+    hand.stolen?.ability === 'DADO_TORPEDO'
+  )
 }
 
 // --- SECOND_BET: threshold on current hand strength ---
