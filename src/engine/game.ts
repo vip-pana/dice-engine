@@ -20,7 +20,7 @@ import {
 } from './strategy'
 import { assertValidDeck, drawHandFromDeck, type Deck } from './deck'
 import type { Rng } from './rng'
-import type { Die, Hand } from './types'
+import type { AbilityId, Die, Hand } from './types'
 import type { Action } from './actions'
 import {
   DEFAULT_BET_CONFIG,
@@ -514,7 +514,7 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
   }
 
   // A common Nero di Seppia is unowned, so it hits both seats until someone claims it.
-  if (commonSeppiaIndex(next) !== null) {
+  if (unclaimedCommonIndex(next, 'NERO_DI_SEPPIA') !== null) {
     for (const seat of ['human', 'bot'] as const) {
       // Never stack a second hidden die on a seat already blinded by an own-dice Seppia:
       // the ability conceals ONE die, and two would be a strictly harsher malus than the
@@ -533,16 +533,17 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
 }
 
 /**
- * Index of the Nero di Seppia among the common dice while it is still unclaimed, or null.
+ * Index of a common die carrying `ability` while it is still unclaimed, or null.
  *
- * Returns null once it has been stolen: at that point it is a seat's die, not a table
- * effect, so the both-seats malus no longer applies.
+ * Returns null once that die has been stolen: at that point it is a seat's die, not a table
+ * effect, so any "applies to both" rule stops holding. Shared by the two abilities with a
+ * table-wide form — NERO_DI_SEPPIA (blinds both) and DADO_D_ORO (doubles for whoever wins).
  */
-function commonSeppiaIndex(state: GameState): number | null {
+function unclaimedCommonIndex(state: GameState, ability: AbilityId): number | null {
   if (state.common === null) {
     return null
   }
-  const index = state.common.findIndex((d) => d.ability === 'NERO_DI_SEPPIA')
+  const index = state.common.findIndex((d) => d.ability === ability)
   if (index === -1 || state.stolenCommonIndices.includes(index)) {
     return null
   }
@@ -641,7 +642,7 @@ function handleSteal(state: GameState, player: PlayerId, commonIndex: number): G
   assert(!state.stolenCommonIndices.includes(commonIndex), 'that common die is already taken')
 
   const stolen = state.common[commonIndex]!
-  const wasCommonSeppia = commonSeppiaIndex(state) === commonIndex
+  const wasCommonSeppia = unclaimedCommonIndex(state, 'NERO_DI_SEPPIA') === commonIndex
   let next = setHand(state, player, { stolen })
   next = {
     ...next,
@@ -812,9 +813,43 @@ function describeShowdown(
 // --- Hand resolution & match progression ---
 
 /**
+ * Where a Dado d'Oro is doubling the payout from, or null if nothing is.
+ *
+ * Two sources, checked in this order and NEVER combined — doubling is a switch, not a
+ * counter, so a seat holding one while another sits unclaimed on the table still collects
+ * exactly 2x:
+ *
+ *  - 'held':  among the winner's 4 own dice or their stolen die. Stealing it from the
+ *             commons is the intended way to acquire one, so the stolen die counts.
+ *  - 'table': still among the commons, unstolen. It belongs to nobody, so it doubles for
+ *             WHOEVER wins — including the seat that never touched it.
+ *
+ * Defensive on incomplete hands: a fold can resolve before both hands are formed, in which
+ * case `own`/`stolen` are null and only the table source can apply.
+ */
+function goldenPayoutSource(state: GameState, winner: PlayerId): 'held' | 'table' | null {
+  const hand = state.hands[winner]
+  const held =
+    (hand.own ?? []).some((d) => d.ability === 'DADO_D_ORO') ||
+    hand.stolen?.ability === 'DADO_D_ORO'
+  if (held) {
+    return 'held'
+  }
+  return unclaimedCommonIndex(state, 'DADO_D_ORO') !== null ? 'table' : null
+}
+
+/**
  * Awards the pot per the outcome, updates score, and moves to HAND_COMPLETE (or
- * MATCH_OVER). On a total tie the pot is split back to each player's committed amount
- * and no score changes (the hand is replayed).
+ * MATCH_OVER).
+ *
+ * A total tie splits the pot evenly and changes no score (the hand is replayed); a Dado
+ * d'Oro does nothing there, because a tie is not a win.
+ *
+ * The winning branch is the ONLY place a payout multiplier applies, which is what makes it
+ * cover both ways to win a hand — showdown (goToShowdown) and fold (handleFold) both land
+ * here. The doubled coins are minted rather than taken from the loser: the loser is out
+ * exactly what they bet, win or lose. Total coins on the table therefore grow, which is
+ * harmless because the match ends on WINS_TO_TAKE_MATCH, not on bankruptcy.
  */
 function resolveHand(state: GameState, outcome: HandOutcome): GameState {
   let next = state
@@ -833,11 +868,24 @@ function resolveHand(state: GameState, outcome: HandOutcome): GameState {
     }
   } else {
     const winner = outcome.winner
+    const golden = goldenPayoutSource(next, winner)
+    const pot = next.pot
+    const payout = golden === null ? pot : pot * 2
     next = {
       ...next,
-      bankroll: { ...next.bankroll, [winner]: next.bankroll[winner] + next.pot },
+      bankroll: { ...next.bankroll, [winner]: next.bankroll[winner] + payout },
       pot: 0,
       score: { ...next.score, [winner]: next.score[winner] + 1 },
+    }
+    if (golden !== null) {
+      // Say WHICH source doubled it: with a die on the table the winner may never have
+      // touched a Dado d'Oro, and an unexplained double payout reads as a bug.
+      const why =
+        golden === 'held' ? 'in mano' : 'lasciato tra i comuni: vale per chi vince'
+      next = withLog(
+        next,
+        `Dado d'Oro (${why}) — ${labelOf(winner)} incassa il doppio: ${payout} invece di ${pot}.`,
+      )
     }
   }
 

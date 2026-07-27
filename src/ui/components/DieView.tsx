@@ -52,6 +52,29 @@ export const ACCENT_BY_KIND = { buff: '#facc15', malus: '#a78bfa' } as const
 /** Default accent for ability chrome that is not tied to one specific die. */
 export const ABILITY_ACCENT = ACCENT_BY_KIND.buff
 
+/**
+ * Per-ability accent overrides, applied on top of the kind default.
+ *
+ * Only for abilities whose identity IS a colour — a "Dado d'Oro" that renders in the same
+ * yellow as every other buff defeats its own name. Keep this table small: the kind default
+ * is what makes buff-vs-malus readable at a glance, and every override erodes that signal.
+ */
+/** The Dado d'Oro's amber, deeper than the buff yellow so the two never read as one. */
+export const GOLD_ACCENT = '#f59e0b'
+
+const ACCENT_BY_ABILITY: Partial<Record<AbilityId, string>> = {
+  DADO_D_ORO: GOLD_ACCENT,
+}
+
+/** The accent for a die carrying `ability`: its override if it has one, else its kind. */
+export function accentForAbility(ability: AbilityId | null | undefined): string {
+  const spec = abilitySpec(ability)
+  if (spec === null) {
+    return ABILITY_ACCENT
+  }
+  return ACCENT_BY_ABILITY[spec.id] ?? ACCENT_BY_KIND[spec.kind]
+}
+
 export function DieView(props: DieViewProps): JSX.Element {
   const {
     value,
@@ -69,11 +92,7 @@ export function DieView(props: DieViewProps): JSX.Element {
   // A concealed die shows neither pips nor split: its `value` is a placeholder, and the
   // split would spell out the very face being hidden.
   const split = !concealed && spec !== null && rolls !== undefined && rolls.length > 1 ? rolls : null
-  const accent = concealed
-    ? CONCEALED_ACCENT
-    : spec === null
-      ? ABILITY_ACCENT
-      : ACCENT_BY_KIND[spec.kind]
+  const accent = concealed ? CONCEALED_ACCENT : accentForAbility(ability)
 
   const border = selected
     ? '3px solid #d97706'

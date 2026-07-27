@@ -25,7 +25,7 @@ import { categoryLabel, playerLabel } from './labels'
 import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
 import { DeckPreview } from './components/DeckPreview'
-import { DieView, ABILITY_ACCENT } from './components/DieView'
+import { DieView, ABILITY_ACCENT, GOLD_ACCENT } from './components/DieView'
 import { HandRankingLegend } from './components/HandRankingLegend'
 
 // A single Rng dedicated to the BOT's decision-making, kept separate from the match Rng
@@ -576,8 +576,33 @@ function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
         Tu: <strong>{categoryLabel(sd.human)}</strong> [{sd.human.values.join(' ')}] · Bot:{' '}
         <strong>{categoryLabel(sd.bot)}</strong> [{sd.bot.values.join(' ')}]
       </div>
+      {goldenPayoutNote(state) !== null && (
+        // A doubled pot is the most surprising thing that can happen to the bankroll, and
+        // the log line explaining it scrolls away. Repeat it where it cannot be missed.
+        <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: GOLD_ACCENT }}>
+          🪙 {goldenPayoutNote(state)}
+        </div>
+      )}
     </section>
   )
+}
+
+/**
+ * The engine's own "payout doubled" log line for the hand just finished, or null.
+ *
+ * Reads the log rather than recomputing: the reducer already decided and worded this, and a
+ * second implementation here could disagree with the coins actually paid.
+ *
+ * Scans the last few lines, not just the last one: on a match-winning hand resolveHand
+ * appends "vince il match" AFTER the payout line, so checking only the tail would drop the
+ * note exactly when the match ends. The window is small enough that a previous hand's line
+ * can never reach it — a hand always logs its own showdown lines in between.
+ */
+const GOLDEN_LOG_WINDOW = 3
+
+function goldenPayoutNote(state: GameState): string | null {
+  const tail = state.log.slice(-GOLDEN_LOG_WINDOW)
+  return tail.find((l) => l.includes("Dado d'Oro (")) ?? null
 }
 
 // ---------------------------------------------------------------------------

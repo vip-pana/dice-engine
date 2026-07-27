@@ -28,6 +28,15 @@ export type AbilityId =
    * PlayerHandState); the spec entry exists only so it can drop, be named and be drawn.
    */
   | 'NERO_DI_SEPPIA'
+  /**
+   * Doubles the pot the winner collects.
+   *
+   * Like NERO_DI_SEPPIA it changes no die value; unlike every other ability it moves
+   * COINS, so its effect lives in the reducer at payout time (see `hasGoldenPayout` in
+   * game.ts) rather than in AbilitySpec.roll. Held by a seat it doubles for that seat;
+   * left unstolen among the commons it doubles for whoever wins.
+   */
+  | 'DADO_D_ORO'
 
 /**
  * A rolled die.

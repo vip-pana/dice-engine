@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { abilitySpec, type Deck } from '../../engine'
-import { ACCENT_BY_KIND } from './DieView'
+import { accentForAbility } from './DieView'
 
 /** Slots per row: DECK_SIZE laid out as two tidy rows of five. */
 const DECK_COLUMNS = 5
@@ -52,7 +52,7 @@ export function DeckPreview({ deck, variant = 'full' }: DeckPreviewProps): JSX.E
           <DeckSlot
             key={i}
             icon={spec?.icon}
-            accent={spec === null ? null : ACCENT_BY_KIND[spec.kind]}
+            accent={spec === null ? null : accentForAbility(spec.id)}
             label={spec?.name ?? 'normale'}
             size={size}
             showLabel={variant === 'full'}

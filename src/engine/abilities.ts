@@ -4,9 +4,16 @@
 // rolling behaviour, and how many raw faces it consumes. Adding the Nth ability means
 // adding one entry here; no other engine file needs a new branch.
 //
-// Constraint respected by every ability: it may only decide *what face a single die
-// shows when rolled*. It never touches hand evaluation, betting or phase order. That
-// keeps hand.ts/game.ts oblivious to the roguelike layer.
+// Constraint on THIS FILE: an AbilitySpec may only decide *what face a single die shows
+// when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
+// hand.ts oblivious to the roguelike layer entirely.
+//
+// Two abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// effect lives in the reducer, where the state it acts on exists:
+//   - NERO_DI_SEPPIA moves INFORMATION -> applyConcealment in game.ts
+//   - DADO_D_ORO moves COINS           -> hasGoldenPayout in game.ts
+// Both are named here so the pattern is discoverable from the registry. A new ability that
+// only decides a face still needs nothing but an entry in this table.
 
 import type { AbilityId, Die, DieValue } from './types'
 import type { Rng } from './rng'
@@ -104,6 +111,22 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // releaseCommonConcealment in game.ts). That gives the "no owner" case a real target.
     // Value-wise a plain d6 — the die itself is ordinary. Its power is informational and
     // is applied by the reducer when the hand is dealt (see applyConcealment in game.ts),
+    // because AbilitySpec is only allowed to decide faces.
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
+  DADO_D_ORO: {
+    id: 'DADO_D_ORO',
+    name: "Dado d'Oro",
+    description:
+      'Se vinci la mano incassi il doppio del piatto. Se resta tra i dadi comuni vale per entrambi.',
+    icon: '🪙',
+    kind: 'buff',
+    // Not ownOnly: an unstolen common Dado d'Oro doubles for WHOEVER wins, so it has a real
+    // effect with no owner and must not be filtered out of the commons.
+    // Value-wise a plain d6 — it never helps you win the hand, only what winning pays. The
+    // payout is applied by the reducer at resolveHand time (see hasGoldenPayout in game.ts),
     // because AbilitySpec is only allowed to decide faces.
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],

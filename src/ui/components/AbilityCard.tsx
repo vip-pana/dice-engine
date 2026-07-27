@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { abilitySpec, type AbilityId } from '../../engine'
-import { ACCENT_BY_KIND } from './DieView'
+import { accentForAbility } from './DieView'
 
 /**
  * One ability presented as a card: icon, name, rules text, Bonus/Malus.
@@ -25,7 +25,7 @@ export function AbilityCard(props: AbilityCardProps): JSX.Element | null {
   if (spec === null) {
     return null
   }
-  const accent = ACCENT_BY_KIND[spec.kind]
+  const accent = accentForAbility(spec.id)
   const clickable = onToggle !== undefined
 
   const body = (
