@@ -261,6 +261,116 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
     }
   })
 
+  // --- Common (unowned) Nero di Seppia ---
+  //
+  // An unclaimed one belongs to nobody, so it blinds BOTH seats; stealing it narrows the
+  // malus to the opponent alone. `commonChance: 1` with a Seppia-only pool puts it among
+  // the commons deterministically.
+  const COMMON_SEPPIA = {
+    abilityDrops: { ownChance: 0, commonChance: 1, pool: ['NERO_DI_SEPPIA' as AbilityId] },
+  }
+  const seppiaCommonIndex = (state: ReturnType<typeof createInitialState>): number =>
+    state.common!.findIndex((d) => d.ability === 'NERO_DI_SEPPIA')
+
+  it('a common Nero di Seppia can now roll up at all', () => {
+    // It used to be ownOnly, which filtered it out of the commons entirely.
+    const rng = createRng(201)
+    const common = rollCommonDice(rng, COMMON_SEPPIA.abilityDrops)
+    expect(common.some((d) => d.ability === 'NERO_DI_SEPPIA')).toBe(true)
+  })
+
+  it('while unclaimed, it blinds BOTH seats', () => {
+    const rng = createRng(202)
+    const state = playToSteal(createInitialState(COMMON_SEPPIA), rng)
+    expect(seppiaCommonIndex(state)).toBeGreaterThanOrEqual(0)
+    expect(state.hands.human.concealedIndices).toHaveLength(1)
+    expect(state.hands.bot.concealedIndices).toHaveLength(1)
+    // Each seat is masked in its own view.
+    expect(viewFor(state, 'human').hands.human.own!.some((d) => d.concealed)).toBe(true)
+    expect(viewFor(state, 'bot').hands.bot.own!.some((d) => d.concealed)).toBe(true)
+  })
+
+  it('stealing it frees the stealer and keeps the opponent blind', () => {
+    const rng = createRng(203)
+    let state = playToSteal(createInitialState(COMMON_SEPPIA), rng)
+    const seppia = seppiaCommonIndex(state)
+    const stealer = state.primary
+    const victim = other(stealer)
+
+    state = reducer(state, { type: 'STEAL', player: stealer, commonIndex: seppia }, rng)
+
+    expect(state.hands[stealer].concealedIndices).toHaveLength(0)
+    expect(state.hands[victim].concealedIndices).toHaveLength(1)
+    expect(viewFor(state, stealer).hands[stealer].own!.every((d) => !d.concealed)).toBe(true)
+  })
+
+  it('stealing a NON-seppia common die leaves both seats blind', () => {
+    const rng = createRng(204)
+    let state = playToSteal(createInitialState(COMMON_SEPPIA), rng)
+    const seppia = seppiaCommonIndex(state)
+    const plain = [0, 1, 2].find((i) => i !== seppia)!
+
+    state = reducer(state, { type: 'STEAL', player: state.primary, commonIndex: plain }, rng)
+    // The Seppia is still unclaimed, so the table-wide malus stands.
+    expect(state.hands.human.concealedIndices).toHaveLength(1)
+    expect(state.hands.bot.concealedIndices).toHaveLength(1)
+  })
+
+  it('if nobody steals it, both stay blind until the showdown reveal', () => {
+    const rng = createRng(205)
+    let state = playToSteal(createInitialState(COMMON_SEPPIA), rng)
+    const seppia = seppiaCommonIndex(state)
+    const others = [0, 1, 2].filter((i) => i !== seppia)
+
+    state = reducer(state, { type: 'STEAL', player: state.primary, commonIndex: others[0]! }, rng)
+    state = reducer(
+      state,
+      { type: 'STEAL', player: other(state.primary), commonIndex: others[1]! },
+      rng,
+    )
+    // Both stole a plain die: the Seppia sat there all hand and blinded everyone.
+    expect(state.hands.human.concealedIndices).toHaveLength(1)
+    expect(state.hands.bot.concealedIndices).toHaveLength(1)
+
+    state = reducer(state, { type: 'REROLL', player: state.primary, ownIndices: [] }, rng)
+    state = reducer(state, { type: 'REROLL', player: other(state.primary), ownIndices: [] }, rng)
+    state = reducer(state, { type: 'OPEN', player: state.primary, amount: 10 }, rng)
+    state = reducer(state, { type: 'CALL', player: other(state.primary) }, rng)
+
+    // The showdown still reveals everything.
+    expect(state.hands.human.concealedIndices).toHaveLength(0)
+    expect(state.hands.bot.concealedIndices).toHaveLength(0)
+  })
+
+  it('never stacks two hidden dice on one seat', () => {
+    const rng = createRng(206)
+    // Bot holds its own Seppia AND one sits among the commons: the human is targeted by
+    // both, but the ability hides ONE die, so the human must lose exactly one.
+    const state = playToSteal(
+      createInitialState({ ...COMMON_SEPPIA, loadouts: { bot: SEPPIA_ONLY } }),
+      rng,
+    )
+    expect(state.hands.human.concealedIndices).toHaveLength(1)
+    expect(state.hands.bot.concealedIndices).toHaveLength(1)
+  })
+
+  it('stealing the common one does NOT undo an opponent-owned Seppia', () => {
+    const rng = createRng(207)
+    let state = playToSteal(
+      createInitialState({ ...COMMON_SEPPIA, loadouts: { bot: SEPPIA_ONLY } }),
+      rng,
+    )
+    const seppia = seppiaCommonIndex(state)
+    // The human steals the common Seppia, but the BOT's own one still blinds them.
+    if (state.toAct !== 'human') {
+      const plain = [0, 1, 2].find((i) => i !== seppia)!
+      state = reducer(state, { type: 'STEAL', player: 'bot', commonIndex: plain }, rng)
+    }
+    state = reducer(state, { type: 'STEAL', player: 'human', commonIndex: seppia }, rng)
+
+    expect(state.hands.human.concealedIndices).toHaveLength(1)
+  })
+
   it('the log masks the concealed die for its owner', () => {
     const rng = createRng(109)
     const state = playToSteal(createInitialState({ loadouts: { bot: SEPPIA_ONLY } }), rng)
@@ -309,16 +419,22 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
     expect(view.hands.bot.own![theirs]!.value).toBe(state.hands.bot.own![theirs]!.value)
   })
 
-  it('never drops on a common die: it has no owner to target', () => {
+  it('does drop on a common die, and is not ownOnly any more', () => {
+    // Replaces an older test asserting the opposite. It was ownOnly because an unowned
+    // Seppia had no target; now an unclaimed one blinds BOTH seats, so it has one.
+    expect(ABILITIES.NERO_DI_SEPPIA.ownOnly).not.toBe(true)
+
     const rng = createRng(110)
-    for (let i = 0; i < 400; i++) {
+    let sawIt = false
+    for (let i = 0; i < 400 && !sawIt; i++) {
       const common = rollCommonDice(rng, {
         ownChance: 0,
         commonChance: 1,
         pool: ALL_ABILITY_IDS,
       })
-      expect(common.every((d) => d.ability !== 'NERO_DI_SEPPIA')).toBe(true)
+      sawIt = common.some((d) => d.ability === 'NERO_DI_SEPPIA')
     }
+    expect(sawIt).toBe(true)
   })
 })
 

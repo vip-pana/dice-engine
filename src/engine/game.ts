@@ -483,11 +483,17 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
 }
 
 /**
- * Applies every Nero di Seppia on the table: each seat holding one conceals a single
- * random die of the OPPONENT's four.
+ * Applies every Nero di Seppia on the table.
  *
- * Symmetric by construction — if both seats rolled one, both lose sight of a die. The
- * choice of which die is uniform (per the design call) and drawn from the match Rng, so
+ * Two sources, both handled here:
+ *
+ * - IN A SEAT'S OWN DICE: that seat conceals a single random die of the OPPONENT's four.
+ *   Symmetric by construction — if both seats rolled one, both lose sight of a die.
+ * - AMONG THE COMMON DICE: it belongs to nobody yet, so it blinds BOTH seats at once. Once
+ *   a player steals it the malus narrows to the opponent only (see releaseCommonConcealment);
+ *   if nobody steals it, both stay blind to the showdown.
+ *
+ * The choice of which die is uniform (per the design call) and drawn from the match Rng, so
  * it replays identically from a seed.
  */
 function applyConcealment(state: GameState, rng: Rng): GameState {
@@ -506,7 +512,64 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
       `${labelOf(seat)} lancia il Nero di Seppia: un dado di ${labelOf(victim)} è nascosto fino allo showdown.`,
     )
   }
+
+  // A common Nero di Seppia is unowned, so it hits both seats until someone claims it.
+  if (commonSeppiaIndex(next) !== null) {
+    for (const seat of ['human', 'bot'] as const) {
+      // Never stack a second hidden die on a seat already blinded by an own-dice Seppia:
+      // the ability conceals ONE die, and two would be a strictly harsher malus than the
+      // owned version. The existing concealment already covers this seat.
+      if (next.hands[seat].concealedIndices.length > 0) {
+        continue
+      }
+      next = setHand(next, seat, { concealedIndices: [rng.nextInt(0, 3)] })
+    }
+    next = withLog(
+      next,
+      'Nero di Seppia tra i comuni: finché nessuno lo ruba, entrambi hanno un dado nascosto.',
+    )
+  }
   return next
+}
+
+/**
+ * Index of the Nero di Seppia among the common dice while it is still unclaimed, or null.
+ *
+ * Returns null once it has been stolen: at that point it is a seat's die, not a table
+ * effect, so the both-seats malus no longer applies.
+ */
+function commonSeppiaIndex(state: GameState): number | null {
+  if (state.common === null) {
+    return null
+  }
+  const index = state.common.findIndex((d) => d.ability === 'NERO_DI_SEPPIA')
+  if (index === -1 || state.stolenCommonIndices.includes(index)) {
+    return null
+  }
+  return index
+}
+
+/**
+ * Narrows a common Nero di Seppia's malus to the opponent once `stealer` claims it.
+ *
+ * The stealer earned the die, so they get their sight back; the opponent keeps a die
+ * hidden, which is exactly how an owned Nero di Seppia behaves. Call AFTER the steal has
+ * been recorded in `stolenCommonIndices`.
+ *
+ * Only clears concealment the COMMON die caused: if the opponent also rolled their own
+ * Seppia, the stealer is blinded by that too and stealing the common one must not undo it.
+ */
+function releaseCommonConcealment(state: GameState, stealer: PlayerId): GameState {
+  const blindedByOpponent = (state.hands[otherPlayer(stealer)].own ?? []).some(
+    (d) => d.ability === 'NERO_DI_SEPPIA',
+  )
+  if (blindedByOpponent || state.hands[stealer].concealedIndices.length === 0) {
+    return state
+  }
+  return withLog(
+    setHand(state, stealer, { concealedIndices: [] }),
+    `Nero di Seppia rubato da ${labelOf(stealer)}: ora il malus colpisce solo ${labelOf(otherPlayer(stealer))}.`,
+  )
 }
 
 /** Formats a seat's own dice for the log, masking the ones that seat cannot see. */
@@ -578,12 +641,18 @@ function handleSteal(state: GameState, player: PlayerId, commonIndex: number): G
   assert(!state.stolenCommonIndices.includes(commonIndex), 'that common die is already taken')
 
   const stolen = state.common[commonIndex]!
+  const wasCommonSeppia = commonSeppiaIndex(state) === commonIndex
   let next = setHand(state, player, { stolen })
   next = {
     ...next,
     stolenCommonIndices: [...next.stolenCommonIndices, commonIndex],
   }
   next = withLog(next, `${labelOf(player)} ruba il dado ${stolen.value}.`)
+
+  // Claiming the common Nero di Seppia turns a table-wide malus into a one-sided one.
+  if (wasCommonSeppia) {
+    next = releaseCommonConcealment(next, player)
+  }
 
   const nonPrimary = otherPlayer(state.primary)
   if (player === state.primary) {

@@ -96,12 +96,12 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'NERO_DI_SEPPIA',
     name: 'Nero di Seppia',
     description:
-      "Nasconde un dado dell'avversario: non ne vedrà il valore fino allo showdown.",
+      "Nasconde un dado dell'avversario fino allo showdown. Tra i dadi comuni acceca entrambi finché qualcuno non lo ruba.",
     icon: '🦑',
     kind: 'buff',
-    // "Hide an opponent's die" needs an owner to have an opponent, so it cannot roll up
-    // as a common die — the commons belong to nobody until they are stolen.
-    ownOnly: true,
+    // Not ownOnly: an unclaimed common Seppia belongs to nobody, so it blinds BOTH seats,
+    // and narrows to the opponent alone once a player steals it (see applyConcealment and
+    // releaseCommonConcealment in game.ts). That gives the "no owner" case a real target.
     // Value-wise a plain d6 — the die itself is ordinary. Its power is informational and
     // is applied by the reducer when the hand is dealt (see applyConcealment in game.ts),
     // because AbilitySpec is only allowed to decide faces.
