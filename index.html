@@ -7,9 +7,22 @@
     <style>
       /*
         The only document-level styling in the app (everything else is inline styles on
-        components). Without this the browser's default 8px body margin sits outside the
-        full-height layout and makes the page scroll by exactly that much.
+        components), so it is deliberately minimal — two rules that cannot be expressed
+        per-component.
+
+        1. border-box everywhere: with the default content-box, any padded element given a
+           percentage width overflows its container by exactly its padding + border. That is
+           what made the ability cards spill out of the sidebar, and buttons were worse
+           since they default to content-box regardless.
+        2. No body margin: the browser's default 8px sits OUTSIDE the full-height layout and
+           makes the page scroll by exactly that much.
       */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
       body {
         margin: 0;
         background: #0f172a;

@@ -63,7 +63,11 @@ export function AbilityCard(props: AbilityCardProps): JSX.Element | null {
     gap: 10,
     padding: '9px 10px',
     borderRadius: 9,
+    // Relies on the global border-box in index.html: with content-box this 100% plus the
+    // padding and border would overflow the sidebar panel.
     width: '100%',
+    // Long ability text must wrap inside the narrow sidebar rather than widen the card.
+    minWidth: 0,
     background: '#111c31',
     border: `1px solid ${active ? `${accent}33` : '#1e293b'}`,
     opacity: active ? 1 : 0.45,
