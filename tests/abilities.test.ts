@@ -732,6 +732,27 @@ describe('random ability drops', () => {
     )
     expect(state.hands[state.primary].stolen!.ability).toBe('STELLA_ESSICCATA')
   })
+
+  it('the steal log names the ability that changed hands, not just a value', () => {
+    // Regression: the steal line printed `stolen.value` directly, so taking a SPECIAL logged
+    // as a bare number and the log hid that an ability had moved to another seat.
+    const rng = createRng(505)
+    let state = createInitialState({
+      abilityDrops: { ownChance: 0, commonChance: 1, pool: ALL_ABILITY_IDS },
+    })
+    state = playToSteal(state, rng)
+    const specialIndex = state.common!.findIndex((d) => d.ability === 'STELLA_ESSICCATA')
+    expect(specialIndex).toBeGreaterThanOrEqual(0)
+
+    state = reducer(
+      state,
+      { type: 'STEAL', player: state.primary, commonIndex: specialIndex },
+      rng,
+    )
+    const stealLine = state.log.find((line) => line.includes('ruba il dado'))
+    expect(stealLine).toBeDefined()
+    expect(stealLine).toContain(ABILITIES.STELLA_ESSICCATA.icon)
+  })
 })
 
 // --- helpers -------------------------------------------------------------

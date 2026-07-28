@@ -668,7 +668,9 @@ function handleSteal(state: GameState, player: PlayerId, commonIndex: number): G
     ...next,
     stolenCommonIndices: [...next.stolenCommonIndices, commonIndex],
   }
-  next = withLog(next, `${labelOf(player)} ruba il dado ${stolen.value}.`)
+  // dieStr, not stolen.value: a bare number would hide that an ABILITY just changed hands,
+  // which is the most consequential thing a steal can do.
+  next = withLog(next, `${labelOf(player)} ruba il dado ${dieStr(stolen)}.`)
 
   // Claiming the common Nero di Seppia turns a table-wide malus into a one-sided one.
   if (wasCommonSeppia) {

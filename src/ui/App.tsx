@@ -887,7 +887,10 @@ function CommonRow({
             ability={die.ability}
             rolls={die.rolls}
             dimmed={taken}
-            caption={taken ? 'rubato' : canSteal ? 'rubabile' : undefined}
+            // 'preso' rather than 'rubato' for a taken common: the die that LEFT and the die
+            // that arrived in a seat row would otherwise carry the same label, which is half
+            // of why a steal reads as if nothing moved.
+            caption={taken ? 'preso' : canSteal ? 'rubabile' : undefined}
             onClick={
               canSteal && !taken
                 ? () => dispatch({ type: 'STEAL', player: 'human', commonIndex: index })
@@ -939,7 +942,17 @@ function BotRow({
             />
           ))}
           {hand.stolen ? (
-            <DieView value={hand.stolen.value} caption="rubato" />
+            // The stolen die keeps the ability it carried among the commons, so it must
+            // render with the same accent as an own special — otherwise a stolen special is
+            // indistinguishable from a plain d6 and the transfer reads as if it never
+            // happened. No `concealed`/`blindedToOpponent` here: concealedIndices only
+            // indexes `own`, so the stolen die can never be hidden from anyone.
+            <DieView
+              value={hand.stolen.value}
+              ability={hand.stolen.ability}
+              rolls={hand.stolen.rolls}
+              caption="rubato"
+            />
           ) : (
             <Placeholder text="dado rubato" />
           )}
@@ -1000,7 +1013,12 @@ function HumanRow({
           />
         ))}
         {hand.stolen ? (
-          <DieView value={hand.stolen.value} caption="rubato" />
+          <DieView
+            value={hand.stolen.value}
+            ability={hand.stolen.ability}
+            rolls={hand.stolen.rolls}
+            caption="rubato"
+          />
         ) : (
           <Placeholder text="dado rubato" />
         )}
