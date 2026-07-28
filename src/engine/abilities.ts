@@ -137,7 +137,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'DADO_TORPEDO',
     name: 'Dado Torpedo',
     description:
-      "Scegli un dado dell'avversario: allo showdown perde 1. Il 10% delle volte elettrizza il campo e ne perde uno anche a te. Tra i comuni colpisce entrambi a caso.",
+      "Scegli un dado dell'avversario: allo showdown perde 1. Il 10% delle volte elettrizza il campo e un tuo dado a caso perde 1 pure lui. Tra i comuni colpisce entrambi a caso.",
     icon: '⚡',
     // A malus: it damages a die, so it must read violet like the D4 and never as a reward.
     // Note the die it sits on is a normal d6 — the malus is inflicted on the OPPONENT.
