@@ -31,13 +31,20 @@ npm run dev        # dev server UI (Vite)
 npm test           # test unitari (Vitest)
 npm run typecheck  # type-check TypeScript strict
 npm run sim        # simulatore Monte Carlo (tsx)
+npm run sim:abilities  # forza relativa dei dadi speciali
+npm run sim:optimal    # gioco ottimale come tetto teorico
 ```
 
-Il simulatore accetta due variabili d'ambiente opzionali:
+I simulatori accettano due variabili d'ambiente opzionali:
 
 ```bash
 SIM_TRIALS=200000 SIM_SEED=42 pnpm sim
 ```
+
+`sim:abilities` a 20.000 mani richiede qualche minuto: la scelta del rilancio
+campiona ogni keep-set, quindi il costo cresce col numero di mani. Per un giro
+veloce basta `SIM_TRIALS=2000`, tenendo presente che sotto le ~10.000 mani il
+rumore è dello stesso ordine delle differenze che stai cercando.
 
 Stampa la distribuzione delle categorie prodotta dalla strategia condivisa
 (furto greedy + reroll euristico fino a 4 dadi), da confrontare con i target
@@ -56,11 +63,18 @@ segue la sequenza fissa:
    (≥ minimo); l'altro deve vedere o rilanciare (niente check, niente fold).
 3. **Furto** — clicca un dado comune per rubarlo (il primario ruba per primo).
 4. **Scelta rilancio** — seleziona quali dei tuoi 4 dadi rilanciare (tutti tranne
-   il rubato), poi conferma.
-5. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
+   il rubato), poi conferma. Quando entrambi hanno scelto **i dadi vengono tirati
+   subito**: da qui in poi la mano è definita.
+5. **Mulinello** — solo se uno dei due ha quel dado speciale: avendo visto il
+   risultato, decide se tirarlo una terza volta. Se nessuno ce l'ha, questo passo
+   **non esiste**.
+6. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
    rilancia o **lascia la mano** (il fold è possibile solo qui, e solo se stai
-   affrontando una puntata: chi lascia cede piatto e punto).
-6. **Showdown** — si confrontano le mani; il vincitore incassa il piatto.
+   affrontando una puntata: chi lascia cede piatto e punto). Nota che a questo
+   punto **conosci già i tuoi dadi definitivi**: la seconda puntata è una scelta
+   informata, non un azzardo.
+7. **Showdown** — si confrontano le mani, si applicano i Dado Torpedo, il
+   vincitore incassa il piatto.
 
 Se nessuno dei due ha più monete da puntare, le finestre di scommessa vengono
 **saltate**: la mano si gioca comunque per il punto del Bo3.
@@ -83,3 +97,59 @@ partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
   speciali col loro tasso.
 - A fine match: *Nuova partita* tiene il mazzo (e ripesca quello del bot),
   *Cambia mazzo* torna alla schermata di composizione.
+
+### Dadi speciali
+
+Ogni speciale è una voce del registro in
+[`src/engine/abilities.ts`](src/engine/abilities.ts); la schermata del mazzo ne
+mostra nome, icona e regola.
+
+| Dado | Effetto | Se resta tra i comuni |
+| --- | --- | --- |
+| ✵ Stella Essiccata | Tira 3 dadi e tiene il più alto | Vale per chi lo ruba |
+| ▲ D4 | Esce sempre 1–4: è un **malus** | Vale per chi lo ruba |
+| 🦑 Nero di Seppia | Nasconde un dado dell'avversario fino allo showdown | Acceca **entrambi** |
+| 🪙 Dado d'Oro | Il vincitore incassa il doppio | Raddoppia per **chiunque** vinca |
+| ⚡ Dado Torpedo | Un dado scelto dell'avversario perde 1 allo showdown; 10% il campo si elettrizza e un tuo dado **a caso** perde 1 | Colpisce **entrambi** a caso |
+| ⚙ Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
+
+Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
+serve un momento in cui il risultato esiste già ma la mano non è chiusa.
+Il Torpedo colpisce **dopo** il terzo tiro, quindi il Mulinello non può annullare
+il -1.
+
+#### Forza misurata
+
+`pnpm sim:abilities` fa giocare un loadout con **1 dado speciale** contro quattro
+dadi normali, stessa strategia da entrambe le parti: l'unica variabile sono i
+dadi, quindi lo scostamento da 50% è il contributo dell'abilità.
+
+Misura a **20.000 mani per scenario**, seed di default:
+
+| Dado | Winrate vs 4 normali |
+| --- | --- |
+| ⚙ Mulinello | 53,2% |
+| ✵ Stella Essiccata | 52,8% |
+| 🦑 Nero di Seppia | 49,9% * |
+| 🪙 Dado d'Oro | 49,9% * |
+| ⚡ Dado Torpedo | 49,9% * |
+| ▲ D4 | 48,3% |
+
+Controllo (normali vs normali): **49,4%**, cioè ≈50% a meno del rumore di
+campionamento. Quel ±0,5% è anche il margine d'errore da tenere presente
+leggendo la tabella.
+
+**\* Quei tre valori sono identici, e non per caso.** Il simulatore misura solo la
+**forza della mano di 5 dadi**, e Nero di Seppia, Dado d'Oro e Dado Torpedo non
+toccano il valore dei dadi di chi li possiede: nascondono informazione,
+raddoppiano il piatto, o colpiscono l'avversario in un punto che il simulatore non
+modella. Per il simulatore sono d6 normali — infatti riportano tutti e tre
+esattamente lo stesso conteggio del controllo. **Il loro valore reale non è
+misurato qui**: va valutato a partita intera (piatto, monete, informazione), non
+su una mano singola.
+
+Le due abilità che il simulatore misura davvero sono quindi il Mulinello e la
+Stella, e stanno entrambe intorno a **+3 punti** sopra il controllo. Il Mulinello
+è nella stessa fascia della Stella, non oltre: un terzo tiro su **un** dado vale
+circa quanto tenere il migliore di tre. Il D4 è sotto il controllo, come si
+aspetta da un malus.

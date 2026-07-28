@@ -308,7 +308,12 @@ export function chooseStolenDie(
 
 /**
  * Full heuristic play of a single hand: roll own + common, greedy-steal the best common
- * die, then reroll by heuristic. Returns the final 5-die hand. Used by the simulator.
+ * die, then reroll by heuristic, then spend a Mulinello's extra roll if it helps. Returns
+ * the final 5-die hand. Used by the simulator.
+ *
+ * The Mulinello step lives here rather than only in the reducer because this function is the
+ * simulator's whole model of a hand. Without it the balance harness would measure a Mulinello
+ * that never fires and report it as worth nothing.
  */
 export function playHeuristicHand(
   rng: Rng,
@@ -319,5 +324,41 @@ export function playHeuristicHand(
   const common = rollCommonDice(rng)
   const { die: stolen } = chooseStolenDie(own, common)
   const reroll = new Set(chooseRerollIndices(own, stolen, rng, 60, maxReroll))
-  return finalHand(own, stolen, reroll, rng)
+  return applyMulinello(finalHand(own, stolen, reroll, rng), rng)
+}
+
+/**
+ * Spends a Mulinello's extra roll on its own die when the exact EV beats standing pat.
+ *
+ * Enumerated, not sampled: ONE die has only six outcomes, so averaging all six is both exact
+ * and cheaper than any sample count worth trusting. It also consumes no Rng for the decision
+ * itself — `expectedScore` draws per sample, which at 40k hands x 60 samples dominated the
+ * whole simulation.
+ *
+ * `exactRerollEV` in optimal.ts computes the same quantity, but optimal.ts imports from THIS
+ * file, so calling it here would close an import cycle. The bot has no such constraint and
+ * uses it directly; both agree because the arithmetic is exact on either side.
+ *
+ * Only own dice are considered: a stolen Mulinello is reachable in a real match, but this
+ * heuristic's stolen die is fixed throughout, matching chooseRerollIndices.
+ */
+function applyMulinello(hand: Hand, rng: Rng): Hand {
+  const own: OwnDice = [hand[0], hand[1], hand[2], hand[3]]
+  const index = own.findIndex((d) => d.ability === 'MULINELLO')
+  if (index === -1) {
+    return hand
+  }
+  const stolen = hand[4]
+
+  let total = 0
+  for (const face of [1, 2, 3, 4, 5, 6] as const) {
+    const trial = own.map((die, i) => (i === index ? { ...die, value: face } : die))
+    total += handScore([trial[0]!, trial[1]!, trial[2]!, trial[3]!, stolen])
+  }
+  if (total / 6 <= handScore(hand)) {
+    return hand
+  }
+
+  const after = own.map((die, i) => (i === index ? rerollDie(rng, die) : die))
+  return [after[0]!, after[1]!, after[2]!, after[3]!, stolen]
 }
