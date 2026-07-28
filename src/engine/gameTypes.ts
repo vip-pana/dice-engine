@@ -31,23 +31,36 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * Phases of a single hand, in fixed order (see SPEC). The reducer advances through
  * these; only actions valid for the current phase are accepted.
  *
- *  ROLL_OFF      -> both players roll one die; highest becomes primary (tie -> re-roll)
- *  INITIAL_BET   -> primary opens with a free amount; opponent must see/raise (no fold)
- *  STEAL         -> primary steals a common die first, then non-primary (exclusive)
- *  REROLL_SELECT -> each player picks which own dice to reroll (up to 4; stolen fixed)
- *  SECOND_BET    -> primary bets >= first bet; opponent see/raise (no check, no fold)
- *  SHOWDOWN      -> hands compared, pot awarded (or split + replay on total tie)
- *  HAND_COMPLETE -> result recorded; ready to start next hand or end the match
- *  MATCH_OVER    -> Best of 3 decided
+ *  ROLL_OFF         -> both players roll one die; highest becomes primary (tie -> re-roll)
+ *  INITIAL_BET      -> primary opens with a free amount; opponent must see/raise (no fold)
+ *  STEAL            -> primary steals a common die first, then non-primary (exclusive)
+ *  REROLL_SELECT    -> each player picks which own dice to reroll (up to 4; stolen fixed).
+ *                      The picked dice are rolled as soon as BOTH players have chosen, so
+ *                      the results are on the table before anything downstream.
+ *  MULINELLO_SELECT -> SKIPPED unless a seat holds a Mulinello: that seat, having seen the
+ *                      reroll, chooses whether to roll that one die a third time
+ *  SECOND_BET       -> primary bets >= first bet; opponent see/raise (no check, no fold)
+ *  SHOWDOWN         -> hands compared, pot awarded (or split + replay on total tie)
+ *  HAND_COMPLETE    -> result recorded; ready to start next hand or end the match
+ *  MATCH_OVER       -> Best of 3 decided
  *
  * Note: the dice rolls (own + common) happen deterministically on transition INTO
  * STEAL, so there is no separate "rolling" phase to click through.
+ *
+ * MULINELLO_SELECT is skipped when nobody holds the ability, so a match without one runs
+ * through exactly the phases it always did. That is deliberate: a phase that appeared in
+ * every hand would make every existing caller pay for an ability it is not using.
+ *
+ * Consequence of resolving the reroll in REROLL_SELECT rather than at the showdown: the
+ * second bet is now placed with the final dice KNOWN. That trade is the price of an ability
+ * whose decision needs the result to exist, and it is intended, not incidental.
  */
 export type Phase =
   | 'ROLL_OFF'
   | 'INITIAL_BET'
   | 'STEAL'
   | 'REROLL_SELECT'
+  | 'MULINELLO_SELECT'
   | 'SECOND_BET'
   | 'SHOWDOWN'
   | 'HAND_COMPLETE'
@@ -82,10 +95,23 @@ export interface PlayerHandState {
   /** Chips this player has committed to the pot in the current hand. */
   readonly committed: number
   /**
-   * Chosen own-dice indices to reroll (step 5). Recorded during REROLL_SELECT and
-   * applied physically at the transition into SHOWDOWN (step 7). Null until chosen.
+   * Chosen own-dice indices to reroll (step 5). Recorded during REROLL_SELECT and applied
+   * physically as soon as BOTH seats have chosen, still inside that phase. Null until chosen.
+   *
+   * It used to be applied at the showdown instead. The Mulinello forced the move: its holder
+   * must see the rerolled face before deciding on a third roll, so the roll has to have
+   * happened while the hand is still live. Kept on the state afterwards as the record of what
+   * was asked for, not of what is still pending.
    */
   readonly rerollSelection: readonly number[] | null
+  /**
+   * Whether this seat has already spent its Mulinello's extra roll this hand.
+   *
+   * The extra roll is one-shot, and MULINELLO_SELECT is a phase a client sends actions into,
+   * so "already used" has to be state rather than an implicit consequence of the phase —
+   * otherwise the same seat could keep rolling until it liked the face.
+   */
+  readonly mulinelloUsed: boolean
   /**
    * Own-dice indices THIS player cannot see, because the opponent rolled a Nero di Seppia.
    *

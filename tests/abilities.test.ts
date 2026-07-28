@@ -604,11 +604,13 @@ describe('random ability drops', () => {
         hits.set(id, (hits.get(id) ?? 0) + 1)
       }
     }
-    // Each ability independently lands in ~35% of hands.
+    // Each ability independently lands in ~ownChance of hands. Bounds derived from the
+    // configured chance rather than hardcoded: the old +-0.02 was tight enough that simply
+    // registering another ability could tip one id's sampling noise past it.
     for (const id of ALL_ABILITY_IDS) {
       const rate = (hits.get(id) ?? 0) / trials
-      expect(rate).toBeGreaterThan(0.33)
-      expect(rate).toBeLessThan(0.37)
+      expect(rate).toBeGreaterThan(drops.ownChance - 0.03)
+      expect(rate).toBeLessThan(drops.ownChance + 0.03)
     }
   })
 
@@ -771,6 +773,7 @@ function playHandToCompletion(
   s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
   s = reducer(s, rerollAction(s, s.primary, []), rng)
   s = reducer(s, rerollAction(s, other(s.primary), []), rng)
+  s = passMulinelli(s, rng)
   s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
   s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
   return s
@@ -796,6 +799,25 @@ function rerollAction(
   return holds
     ? { type: 'REROLL', player, ownIndices, torpedoTarget: target }
     : { type: 'REROLL', player, ownIndices }
+}
+
+/**
+ * Declines every pending Mulinello, landing the state past MULINELLO_SELECT.
+ *
+ * A no-op unless a seat actually holds one, so helpers can call it unconditionally: the phase
+ * is skipped entirely when nobody does. Passing (rather than rolling) is what keeps these
+ * helpers neutral — a third roll would change the dice under tests that are about something
+ * else. Tests about the Mulinello drive the phase themselves.
+ */
+function passMulinelli(
+  state: ReturnType<typeof createInitialState>,
+  rng: ReturnType<typeof createRng>,
+): ReturnType<typeof createInitialState> {
+  let s = state
+  while (s.phase === 'MULINELLO_SELECT') {
+    s = reducer(s, { type: 'MULINELLO_PASS', player: s.toAct }, rng)
+  }
+  return s
 }
 
 /** Drives a fresh state through the roll-off and initial bet, landing in STEAL. */
@@ -1246,6 +1268,10 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     s = reducer(s, rerollAction(s, s.primary, [], 0), rng)
     s = reducer(s, rerollAction(s, np, [], 0), rng)
     expect(s.phase).toBe('SECOND_BET')
+    // Snapshot AFTER the reroll has resolved. The reroll now lands at the end of
+    // REROLL_SELECT rather than at the showdown, so "the dice did not move" no longer
+    // distinguishes a fold from a showdown — what a fold still guarantees is that no zap
+    // lands, since the -1 is applied by goToShowdown and a fold never gets there.
     const beforeHuman = ownSum(s, 'human')
     const beforeBot = ownSum(s, 'bot')
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: 20 }, rng)
@@ -1318,6 +1344,227 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     const s = playToSteal(createInitialState({ loadouts: { human: TORPEDO_ONLY } }), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.DADO_TORPEDO.icon)
+  })
+})
+
+describe('MULINELLO: an optional third roll, chosen after seeing the second', () => {
+  const MULINELLO_ONLY: Loadout = ['MULINELLO', null, null, null]
+
+  /** STEAL -> both seats keep everything, landing wherever the phase machine puts us. */
+  function playToMulinello(
+    start: ReturnType<typeof createInitialState>,
+    rng: ReturnType<typeof createRng>,
+  ): ReturnType<typeof createInitialState> {
+    const np = other(start.primary)
+    let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+    return s
+  }
+
+  it('opens a phase of its own once the reroll has resolved', () => {
+    const rng = createRng(501)
+    const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    const s = playToMulinello(start, rng)
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    expect(s.toAct).toBe('human')
+  })
+
+  it('is skipped entirely when nobody holds one', () => {
+    // The point of the skip: a hand without the ability must follow the path it always did,
+    // so no existing caller pays for a decision it does not have.
+    const rng = createRng(502)
+    const start = playToSteal(createInitialState(), rng)
+    expect(playToMulinello(start, rng).phase).toBe('SECOND_BET')
+  })
+
+  it('rolling replaces only the Mulinello die, and only that one', () => {
+    const rng = createRng(503)
+    const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    let s = playToMulinello(start, rng)
+    const before = [...s.hands.human.own!]
+
+    s = reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+
+    // Slot 0 carries the ability; a fresh face may coincide with the old one, so assert on
+    // the log (which always fires) and on the other three staying put.
+    expect(s.log.some((l) => /Mulinello di/.test(l))).toBe(true)
+    for (const i of [1, 2, 3]) {
+      expect(s.hands.human.own![i]!.value).toBe(before[i]!.value)
+    }
+    expect(s.hands.human.own![0]!.ability).toBe('MULINELLO')
+  })
+
+  it('actually changes the face across seeds, rather than quietly keeping it', () => {
+    // Guards against a reroll that returns the same Die object: over many seeds at least one
+    // third roll must land on a different face.
+    let changed = 0
+    for (let seed = 0; seed < 40; seed++) {
+      const rng = createRng(5100 + seed)
+      const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+      let s = playToMulinello(start, rng)
+      const before = s.hands.human.own![0]!.value
+      s = reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+      if (s.hands.human.own![0]!.value !== before) changed++
+    }
+    expect(changed).toBeGreaterThan(0)
+  })
+
+  it('passing leaves every die exactly as it was', () => {
+    const rng = createRng(504)
+    const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    let s = playToMulinello(start, rng)
+    const before = s.hands.human.own!.map((d) => d.value)
+
+    s = reducer(s, { type: 'MULINELLO_PASS', player: 'human' }, rng)
+
+    expect(s.hands.human.own!.map((d) => d.value)).toEqual(before)
+    expect(s.phase).toBe('SECOND_BET')
+  })
+
+  it('is once per hand, whichever way it was answered', () => {
+    const rng = createRng(505)
+    const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    const s = playToMulinello(start, rng)
+
+    const rolled = reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+    expect(rolled.hands.human.mulinelloUsed).toBe(true)
+    expect(() => reducer(rolled, { type: 'MULINELLO_ROLL', player: 'human' }, rng)).toThrow()
+
+    const passed = reducer(s, { type: 'MULINELLO_PASS', player: 'human' }, rng)
+    expect(() => reducer(passed, { type: 'MULINELLO_ROLL', player: 'human' }, rng)).toThrow()
+  })
+
+  it('cannot be used by a seat that holds no Mulinello', () => {
+    const rng = createRng(506)
+    const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    const s = playToMulinello(start, rng)
+    expect(() => reducer(s, { type: 'MULINELLO_ROLL', player: 'bot' }, rng)).toThrow()
+  })
+
+  it('offers the choice to both seats when both hold one, primary first', () => {
+    const rng = createRng(507)
+    const start = playToSteal(
+      createInitialState({ loadouts: { human: MULINELLO_ONLY, bot: MULINELLO_ONLY } }),
+      rng,
+    )
+    let s = playToMulinello(start, rng)
+    expect(s.toAct).toBe(s.primary)
+
+    s = reducer(s, { type: 'MULINELLO_PASS', player: s.primary }, rng)
+    // Still in the phase: the second holder has not answered yet.
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    expect(s.toAct).toBe(other(s.primary))
+
+    s = reducer(s, { type: 'MULINELLO_PASS', player: other(s.primary) }, rng)
+    expect(s.phase).toBe('SECOND_BET')
+  })
+
+  it('works on a Mulinello acquired from the commons as the stolen die', () => {
+    // The stolen die is fixed everywhere else in the engine, so this is the case most likely
+    // to have been overlooked: seatHolds counts it, therefore the roll has to reach it.
+    const rng = createRng(508)
+    let s = playToSteal(
+      createInitialState({
+        abilityDrops: { ownChance: 0, commonChance: 1, pool: ['MULINELLO' as AbilityId] },
+      }),
+      rng,
+    )
+    const np = other(s.primary)
+    // commonChance puts the ability on ONE common slot, drawn at random — find it rather than
+    // assuming index 0.
+    const at = s.common!.findIndex((d) => d.ability === 'MULINELLO')
+    expect(at).toBeGreaterThanOrEqual(0)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: at }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: at === 0 ? 1 : 0 }, rng)
+    expect(s.hands[s.primary].stolen!.ability).toBe('MULINELLO')
+
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+    expect(s.phase).toBe('MULINELLO_SELECT')
+
+    const ownBefore = s.hands[s.primary].own!.map((d) => d.value)
+    s = reducer(s, { type: 'MULINELLO_ROLL', player: s.primary }, rng)
+
+    // The stolen die was rolled; the four own dice were not touched.
+    expect(s.log.some((l) => /Mulinello di .*dado rubato/.test(l))).toBe(true)
+    expect(s.hands[s.primary].own!.map((d) => d.value)).toEqual(ownBefore)
+    expect(s.hands[s.primary].stolen!.ability).toBe('MULINELLO')
+  })
+
+  it('does nothing while it sits unstolen among the commons', () => {
+    // Unlike the Torpedo or the Seppia, an unowned Mulinello has no table-wide effect: its
+    // content is a decision, and nobody is there to make it. So no phase opens.
+    const rng = createRng(512)
+    let s = playToSteal(
+      createInitialState({
+        abilityDrops: { ownChance: 0, commonChance: 1, pool: ['MULINELLO' as AbilityId] },
+      }),
+      rng,
+    )
+    const at = s.common!.findIndex((d) => d.ability === 'MULINELLO')
+    expect(at).toBeGreaterThanOrEqual(0)
+    // Both seats steal something ELSE, leaving the Mulinello on the table.
+    const others = [0, 1, 2].filter((i) => i !== at)
+    const np = other(s.primary)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: others[1]! }, rng)
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+
+    expect(s.phase).toBe('SECOND_BET')
+    expect(s.log.some((l) => /Mulinello/.test(l))).toBe(false)
+  })
+
+  it('cannot undo a Torpedo: the -1 lands after the third roll', () => {
+    // The ordering that matters. If the zap ran before MULINELLO_SELECT, spending the extra
+    // roll on the marked die would wipe the -1 for free.
+    const rng = createRng(509)
+    let s = playToSteal(
+      createInitialState({
+        loadouts: { human: MULINELLO_ONLY, bot: ['DADO_TORPEDO', null, null, null] },
+      }),
+      rng,
+    )
+    const np = other(s.primary)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    // The bot aims at the human's slot 0 — the very die the Mulinello can roll again.
+    s = reducer(s, rerollAction(s, s.primary, [], 0), rng)
+    s = reducer(s, rerollAction(s, np, [], 0), rng)
+
+    s = reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+    const afterThirdRoll = s.hands.human.own![0]!.value
+
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+    s = reducer(s, { type: 'CALL', player: np }, rng)
+
+    expect(s.log.some((l) => /Dado Torpedo di/.test(l))).toBe(true)
+    const expected = afterThirdRoll > 1 ? afterThirdRoll - 1 : 1
+    expect(s.hands.human.own![0]!.value).toBe(expected)
+  })
+
+  it('is deterministic: same seed and actions give the same dice and log', () => {
+    const run = (roll: boolean): ReturnType<typeof createInitialState> => {
+      const rng = createRng(510)
+      const start = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+      let s = playToMulinello(start, rng)
+      s = reducer(s, { type: roll ? 'MULINELLO_ROLL' : 'MULINELLO_PASS', player: 'human' }, rng)
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      return reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+    }
+    expect(run(true).log).toEqual(run(true).log)
+    expect(run(false).log).toEqual(run(false).log)
+    // The two answers are different games — which is the whole point of it being a choice.
+    expect(run(true).log).not.toEqual(run(false).log)
+  })
+
+  it('shows its icon in the action log like any other special', () => {
+    const rng = createRng(511)
+    const s = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
+    const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
+    expect(rollLine).toContain(ABILITIES.MULINELLO.icon)
   })
 })
 

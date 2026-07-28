@@ -48,6 +48,7 @@ function emptyHandState(): PlayerHandState {
     rerollSelection: null,
     concealedIndices: [],
     torpedoTarget: null,
+    mulinelloUsed: false,
   }
 }
 
@@ -268,6 +269,10 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
       return handleSteal(state, action.player, action.commonIndex)
     case 'REROLL':
       return handleReroll(state, action.player, action.ownIndices, action.torpedoTarget, rng)
+    case 'MULINELLO_ROLL':
+      return handleMulinello(state, action.player, true, rng)
+    case 'MULINELLO_PASS':
+      return handleMulinello(state, action.player, false, rng)
     case 'NEXT_HAND':
       return handleNextHand(state)
   }
@@ -753,8 +758,137 @@ function handleReroll(
   if (player === state.primary) {
     return { ...next, toAct: nonPrimary }
   }
-  // Both selections in -> SECOND_BET. Primary acts first (check or bet).
+
+  // Both selections in, so the dice can actually be thrown. This used to wait until the
+  // showdown; the Mulinello moved it here, because "reroll again if you dislike the result"
+  // needs the result to exist while the hand is still live. Rolling both seats in one step
+  // (rather than each at its own REROLL) keeps neither seat's choice informed by the other's
+  // outcome — the selections were made blind, and they resolve blind.
+  next = applyRerollSelections(next, rng)
+  return afterRerollResolved(next, rng)
+}
+
+/** Throws each seat's chosen dice and persists the results into `own`. */
+function applyRerollSelections(state: GameState, rng: Rng): GameState {
+  let next = state
+  for (const seat of ['human', 'bot'] as const) {
+    const hand = next.hands[seat]
+    assert(hand.own !== null, 'reroll resolved before the dice were rolled')
+    const own = applyReroll(hand.own, hand.rerollSelection ?? [], rng)
+    next = setHand(next, seat, { own })
+  }
+  // Printed even when nothing was rerolled: the line is the record of what is on the table
+  // going into the second bet, which is now placed with these values known.
+  return withLog(
+    next,
+    `Dopo il rilancio — Tu: ${handStr(next, 'human')}. Bot: ${handStr(next, 'bot')}.`,
+  )
+}
+
+/**
+ * Routes out of REROLL_SELECT once the dice have been thrown.
+ *
+ * MULINELLO_SELECT is entered ONLY when a seat can act in it. A phase that showed up in every
+ * hand would force every caller — bot, tests, UI — to click through a decision nobody has,
+ * so a hand with no Mulinello follows exactly the path it always did.
+ */
+function afterRerollResolved(state: GameState, rng: Rng): GameState {
+  const first = firstMulinelloSeat(state)
+  if (first === null) {
+    return enterSecondBet(state, rng)
+  }
+  return withLog(
+    { ...state, phase: 'MULINELLO_SELECT', toAct: first },
+    `${labelOf(first)} ha un Mulinello: può ritirare quel dado una terza volta.`,
+  )
+}
+
+/**
+ * The next seat owed a Mulinello decision, primary first, or null if nobody is.
+ *
+ * Turn order matches every other phase (primary acts first). Both seats can hold one at once
+ * — one among their own dice, one stolen from the commons — so this is a queue, not a flag.
+ */
+function firstMulinelloSeat(state: GameState): PlayerId | null {
+  const order: readonly PlayerId[] = [state.primary, otherPlayer(state.primary)]
+  return order.find((seat) => canUseMulinello(state, seat)) ?? null
+}
+
+/** Whether `seat` holds an unspent Mulinello. */
+function canUseMulinello(state: GameState, seat: PlayerId): boolean {
+  return seatHolds(state, seat, 'MULINELLO') && !state.hands[seat].mulinelloUsed
+}
+
+/**
+ * Spends or declines a Mulinello's extra roll.
+ *
+ * `roll` false is a real move, not a no-op: it marks the extra roll spent, which is what
+ * passes the turn on and eventually leaves the phase. Rng-wise the two branches differ by one
+ * die, and that is fine — the branch is chosen by a player ACTION, so the same action sequence
+ * on the same seed still replays identically. What the project's fixed-draw rule forbids is an
+ * INTERNAL branch nobody declared, like the Torpedo's electrified field (see applyTorpedoes).
+ */
+function handleMulinello(
+  state: GameState,
+  player: PlayerId,
+  roll: boolean,
+  rng: Rng,
+): GameState {
+  assert(state.phase === 'MULINELLO_SELECT', 'MULINELLO only allowed in MULINELLO_SELECT')
+  assert(state.toAct === player, 'not this player to use a Mulinello')
+  assert(seatHolds(state, player, 'MULINELLO'), 'only a Mulinello holder may act here')
+  assert(!state.hands[player].mulinelloUsed, 'the Mulinello extra roll is once per hand')
+
+  let next = setHand(state, player, { mulinelloUsed: true })
+  if (roll) {
+    next = rerollMulinelloDie(next, player, rng)
+  } else {
+    next = withLog(next, `${labelOf(player)} tiene il dado del Mulinello.`)
+  }
+
+  // Both seats can hold one, so hand off before leaving the phase.
+  const remaining = firstMulinelloSeat(next)
+  if (remaining !== null) {
+    return { ...next, toAct: remaining }
+  }
   return enterSecondBet(next, rng)
+}
+
+/**
+ * Rolls this seat's Mulinello die once more, wherever it sits.
+ *
+ * The stolen die is fixed everywhere else in the engine (applyReroll and withZappedOwn both
+ * touch own dice only), but `seatHolds` counts a stolen Mulinello as held — so acquiring one
+ * from the commons has to work, and the extra roll has to land on that die rather than on an
+ * arbitrary own one. Own dice are checked first; a seat holding two Mulinelli spends the own
+ * one first, which is arbitrary but has to be *some* fixed order to stay reproducible.
+ */
+function rerollMulinelloDie(state: GameState, player: PlayerId, rng: Rng): GameState {
+  const hand = state.hands[player]
+  assert(hand.own !== null, 'Mulinello used before the dice were rolled')
+
+  const ownIndex = hand.own.findIndex((die) => die.ability === 'MULINELLO')
+  if (ownIndex !== -1) {
+    const before = hand.own[ownIndex]!
+    const after = rerollDie(rng, before)
+    const own = [...hand.own]
+    own[ownIndex] = after
+    const next = setHand(state, player, {
+      own: [own[0]!, own[1]!, own[2]!, own[3]!],
+    })
+    return withLog(
+      next,
+      `Mulinello di ${labelOf(player)}: il dado ${ownIndex + 1} passa da ${before.value} a ${after.value}.`,
+    )
+  }
+
+  assert(hand.stolen?.ability === 'MULINELLO', 'Mulinello holder has no Mulinello die')
+  const before = hand.stolen
+  const after = rerollDie(rng, before)
+  return withLog(
+    setHand(state, player, { stolen: after }),
+    `Mulinello di ${labelOf(player)}: il dado rubato passa da ${before.value} a ${after.value}.`,
+  )
 }
 
 function enterSecondBet(state: GameState, rng: Rng): GameState {
@@ -802,10 +936,14 @@ function applyReroll(own: OwnDice, selection: readonly number[], rng: Rng): OwnD
   return [after[0]!, after[1]!, after[2]!, after[3]!]
 }
 
-function finalHandOf(hand: PlayerHandState, rng: Rng): Hand {
+/**
+ * Assembles a seat's 5-die hand. No rolling: `own` is already final by the time the showdown
+ * runs, since the reroll resolves back in REROLL_SELECT and any Mulinello in MULINELLO_SELECT.
+ * Rolling here too would silently reroll every hand a second time.
+ */
+function finalHandOf(hand: PlayerHandState): Hand {
   assert(hand.own !== null && hand.stolen !== null, 'incomplete hand at showdown')
-  const selection = hand.rerollSelection ?? []
-  const own = applyReroll(hand.own, selection, rng)
+  const own = hand.own
   return [own[0], own[1], own[2], own[3], hand.stolen]
 }
 
@@ -898,12 +1036,13 @@ function applyTorpedoes(
 
 function goToShowdown(state: GameState, rng: Rng): GameState {
   const rerolled = {
-    human: finalHandOf(state.hands.human, rng),
-    bot: finalHandOf(state.hands.bot, rng),
+    human: finalHandOf(state.hands.human),
+    bot: finalHandOf(state.hands.bot),
   }
 
-  // Zap AFTER the rerolls: applying a Torpedo any earlier would let the victim reroll the
-  // marked die and wipe the -1 for free, since a reroll rebuilds a die from its ability.
+  // Zap here, at the showdown, and not back when the dice were rerolled: applying a Torpedo
+  // before the rolls settle would let the victim reroll the marked die — or spend a Mulinello
+  // on it — and wipe the -1 for free, since a roll rebuilds a die from its ability alone.
   const zapped = applyTorpedoes(rerolled, state, rng)
   const humanHand = zapped.hands.human
   const botHand = zapped.hands.bot
@@ -937,9 +1076,10 @@ function goToShowdown(state: GameState, rng: Rng): GameState {
   for (const line of zapped.logs) {
     next = withLog(next, line)
   }
-  // Log the post-reroll dice so ability splits on rerolled dice are visible too. Safe to
-  // print in full: nothing is concealed any more.
-  next = withLog(next, `Dopo il rilancio — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
+  // The reroll itself was already logged when it happened, back in REROLL_SELECT — but that
+  // line masks dice a seat could not see. This one is the reveal: printed in full, after any
+  // Torpedo, so a concealed die's true face and every zap are finally on the record.
+  next = withLog(next, `Allo showdown — Tu: ${diceStr(humanOwn)}. Bot: ${diceStr(botOwn)}.`)
   next = withLog(next, describeShowdown(humanEval, botEval, outcome))
 
   return resolveHand(next, outcome)

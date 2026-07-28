@@ -50,6 +50,21 @@ export type AbilityId =
    * `torpedoTarget` on PlayerHandState.
    */
   | 'DADO_TORPEDO'
+  /**
+   * Lets its owner roll THIS die a third time, after the normal reroll, if they dislike the
+   * result.
+   *
+   * The first ability whose decision must be made with the outcome already known, which is
+   * why it is the first one to change the PHASE ORDER rather than just a value: the reroll
+   * now resolves at the end of REROLL_SELECT, and a MULINELLO_SELECT phase asks the holder
+   * whether to spend the extra roll (see handleMulinello in game.ts). Every earlier ability
+   * could be decided blind, so none of them needed a moment that did not already exist.
+   *
+   * The choice is one-shot, tracked as `mulinelloUsed` on PlayerHandState. Stealing one from
+   * the commons works and hands the thief the choice; left unstolen it does nothing, since an
+   * ability that IS a decision has nobody to make it.
+   */
+  | 'MULINELLO'
 
 /**
  * A rolled die.

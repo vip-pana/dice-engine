@@ -20,8 +20,13 @@ const FACES: readonly DieValue[] = [1, 2, 3, 4, 5, 6]
 /**
  * Exact expected handScore of rerolling the given own-dice indices, keeping the rest,
  * with the stolen die fixed. Enumerates all 6^k equally-likely outcomes.
+ *
+ * Exported so the bot can price a single die's extra roll (a Mulinello) with the same exact
+ * arithmetic the solver uses, instead of a second, drifting EV estimate. Note the uniform
+ * 1..6 assumption: valid for a plain die or a Mulinello, WRONG for an ability that reshapes
+ * its faces (a Stella keeps max-of-3, a D4 caps at 4), so do not price those with this.
  */
-function exactRerollEV(
+export function exactRerollEV(
   own: OwnDice,
   stolen: Die,
   rerollIdx: readonly number[],

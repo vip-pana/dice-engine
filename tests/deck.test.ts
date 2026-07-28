@@ -291,6 +291,12 @@ describe('deck mode in a match', () => {
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
     s = reducer(s, reroll(s, s.primary), rng)
     s = reducer(s, reroll(s, other(s.primary)), rng)
+    // A full deck can hand a seat a Mulinello, which opens a phase of its own. Decline it:
+    // this helper is about deck plumbing, and an extra roll would move the dice underneath
+    // tests that are measuring something else.
+    while (s.phase === 'MULINELLO_SELECT') {
+      s = reducer(s, { type: 'MULINELLO_PASS', player: s.toAct }, rng)
+    }
     if (s.phase === 'SECOND_BET') {
       s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
       s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)

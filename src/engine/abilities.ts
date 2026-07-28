@@ -8,12 +8,13 @@
 // when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
 // hand.ts oblivious to the roguelike layer entirely.
 //
-// Three abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// Four abilities need more than a face, so their spec below is a plain-d6 stub and the real
 // effect lives in the reducer, where the state it acts on exists:
 //   - NERO_DI_SEPPIA moves INFORMATION -> applyConcealment in game.ts
 //   - DADO_D_ORO moves COINS           -> hasGoldenPayout in game.ts
 //   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
-// All three are named here so the pattern is discoverable from the registry. A new ability
+//   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
+// All four are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
 
 import type { AbilityId, Die, DieValue } from './types'
@@ -147,6 +148,25 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6. Its power is a -1 on someone else's die, applied by the reducer
     // at showdown time (see applyTorpedoes in game.ts), because AbilitySpec is only allowed
     // to decide faces — and because applying it any earlier would let a reroll undo it.
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
+  MULINELLO: {
+    id: 'MULINELLO',
+    name: 'Mulinello',
+    description:
+      'Oltre al rilancio normale, se il secondo risultato non ti piace puoi tirare questo dado una terza volta. Scegli dopo aver visto il risultato. Tra i comuni non fa nulla finché non lo rubi.',
+    icon: '⚙',
+    kind: 'buff',
+    // Not ownOnly: an extra roll needs an owner to decide, and stealing one from the commons
+    // supplies exactly that — seatHolds counts a stolen die, so the thief gets the choice.
+    // Left unstolen it simply does nothing, which is the honest outcome for an ability whose
+    // whole content is a decision: there is nobody to make it. Compare DADO_TORPEDO, which
+    // stays effective unowned because a random victim needs no chooser.
+    // Value-wise a plain d6, like the Torpedo. Its power is a THIRD roll of this same die,
+    // offered in MULINELLO_SELECT (see handleMulinello in game.ts) — a spec may only decide
+    // faces, and this one has to wait for the player to see the second result first.
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,

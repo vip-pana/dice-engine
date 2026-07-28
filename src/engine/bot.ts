@@ -11,6 +11,7 @@ import {
   chooseTorpedoTarget,
   handScore,
 } from './strategy'
+import { exactRerollEV } from './optimal'
 import type { Rng } from './rng'
 import type { Hand } from './types'
 import type { Action } from './actions'
@@ -146,6 +147,8 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
       return chooseSteal(seen, player)
     case 'REROLL_SELECT':
       return chooseReroll(seen, player, rng)
+    case 'MULINELLO_SELECT':
+      return chooseMulinello(seen, player)
     case 'SECOND_BET':
       return chooseSecondBet(seen, player)
     case 'SHOWDOWN':
@@ -215,6 +218,40 @@ function holdsTorpedo(hand: GameState['hands'][PlayerId]): boolean {
     (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
     hand.stolen?.ability === 'DADO_TORPEDO'
   )
+}
+
+// --- MULINELLO_SELECT: spend the extra roll only when it pays ---
+
+/**
+ * Takes the Mulinello's third roll when its exact EV beats keeping the hand as it stands.
+ *
+ * No new EV code: `exactRerollEV` (optimal.ts) prices "reroll exactly this die" by enumerating
+ * all 6 faces, and `handScore` prices standing pat. Both are the same metric the solver and
+ * the reroll heuristic already use, so the bot cannot drift away from them.
+ *
+ * Two known limits, both inherited rather than introduced. `state` is the filtered view, so a
+ * Mulinello concealed by the human's Nero di Seppia is priced from its masked face — the same
+ * blind spot chooseReroll has. And the EV ignores a pending Torpedo, exactly as noted above.
+ */
+function chooseMulinello(state: GameState, player: PlayerId): Action {
+  const h = state.hands[player]
+  if (h.own === null || h.stolen === null) {
+    throw new Error('[bot] Mulinello requested before the dice were rolled')
+  }
+
+  const index = h.own.findIndex((d) => d.ability === 'MULINELLO')
+  // A stolen Mulinello sits outside `own`, which is what exactRerollEV indexes into. Rather
+  // than price it with the wrong arithmetic, keep: the die is already the one the bot chose
+  // to steal, so standing pat is a defensible default rather than a silent mistake.
+  if (index === -1) {
+    return { type: 'MULINELLO_PASS', player }
+  }
+
+  const keep = handScore([h.own[0], h.own[1], h.own[2], h.own[3], h.stolen])
+  const reroll = exactRerollEV(h.own, h.stolen, [index])
+  return reroll > keep
+    ? { type: 'MULINELLO_ROLL', player }
+    : { type: 'MULINELLO_PASS', player }
 }
 
 // --- SECOND_BET: threshold on current hand strength ---

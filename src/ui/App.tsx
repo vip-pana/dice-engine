@@ -997,6 +997,14 @@ function HumanRow({
 
   const liveHand: Hand | null = liveFinalHand(hand)
 
+  // In MULINELLO_SELECT the buttons below the row say what to do; this marks WHICH die they
+  // act on, so the choice is not about a die the player has to hunt for. Highlighting only,
+  // never clickable: the engine picks the die from the ability, not from a click.
+  const mulinelloIndex =
+    state.phase === 'MULINELLO_SELECT' && state.toAct === 'human'
+      ? hand.own.findIndex((d) => d.ability === 'MULINELLO')
+      : -1
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -1008,7 +1016,8 @@ function HumanRow({
             rolls={die.rolls}
             // A concealed die stays selectable: rerolling blind is allowed by design.
             concealed={die.concealed}
-            selected={selecting && selected.includes(i)}
+            selected={(selecting && selected.includes(i)) || i === mulinelloIndex}
+            caption={i === mulinelloIndex ? 'ritirabile ⚙' : undefined}
             onClick={selecting ? () => toggle(i) : undefined}
           />
         ))}
@@ -1170,6 +1179,22 @@ function Controls({
   }
   if (state.phase === 'REROLL_SELECT') {
     return <Hint text="Seleziona i dadi da rilanciare (puoi rilanciarli tutti tranne il rubato), poi conferma." />
+  }
+
+  // MULINELLO_SELECT: unlike STEAL and REROLL_SELECT this is NOT driven inline on the dice.
+  // The choice is about one specific die the engine already identifies, so there is nothing
+  // to pick — only to accept or decline, which is a pair of buttons.
+  if (state.phase === 'MULINELLO_SELECT') {
+    return (
+      <div style={rowStyle}>
+        <PrimaryButton onClick={() => dispatch({ type: 'MULINELLO_ROLL', player: 'human' })}>
+          Ritira il dado ⚙
+        </PrimaryButton>
+        <SecondaryButton onClick={() => dispatch({ type: 'MULINELLO_PASS', player: 'human' })}>
+          Tieni così
+        </SecondaryButton>
+      </div>
+    )
   }
   return <span />
 }
@@ -1467,6 +1492,8 @@ function phaseLabel(phase: GameState['phase']): string {
       return 'Furto'
     case 'REROLL_SELECT':
       return 'Scelta rilancio'
+    case 'MULINELLO_SELECT':
+      return 'Mulinello'
     case 'SECOND_BET':
       return 'Seconda scommessa'
     case 'SHOWDOWN':

@@ -54,10 +54,24 @@ export interface RerollAction {
    * Required if and only if this player holds a Torpedo — the reducer asserts both ways, so
    * a client can neither skip the choice nor zap without the die. Rides on this action
    * rather than getting its own phase: the choice belongs to the same decision point as the
-   * reroll, and the state machine stays untouched.
+   * reroll, and the state machine stays untouched. (Contrast MulinelloAction, which could
+   * NOT ride along: it has to be answered after the reroll result exists.)
    */
   readonly torpedoTarget?: number | undefined
 }
+
+/**
+ * Spend or decline a Mulinello's extra roll, valid in MULINELLO_SELECT.
+ *
+ * Two explicit action types rather than one carrying a boolean: declining is a real move that
+ * passes the turn, and a reducer that accepted silence would leave the phase with no way to
+ * tell "chose to keep" from "client never answered".
+ */
+export type MulinelloAction =
+  /** Roll the Mulinello die once more, replacing its face. One-shot per hand. */
+  | { readonly type: 'MULINELLO_ROLL'; readonly player: PlayerId }
+  /** Keep the current face and pass the turn. */
+  | { readonly type: 'MULINELLO_PASS'; readonly player: PlayerId }
 
 /** Advance from HAND_COMPLETE to the next hand (or reveal MATCH_OVER). */
 export interface NextHandAction {
@@ -73,5 +87,6 @@ export type Action =
   | BetAction
   | StealAction
   | RerollAction
+  | MulinelloAction
   | NextHandAction
   | RollOffAction
