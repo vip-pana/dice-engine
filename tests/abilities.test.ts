@@ -137,8 +137,9 @@ describe('D4: a 4-sided die', () => {
     )
     const rollLine = state.log.find((l) => l.startsWith('Lancio —'))!
     expect(rollLine).toContain(ABILITIES.D4.icon)
-    // Icon + value, with no split parentheses for a single-face ability.
-    expect(rollLine).toMatch(/▲[1-4](?!\s*\()/)
+    // Icon + value, with no split parentheses for a single-face ability. Icon read from the
+    // registry rather than typed in, so re-skinning an ability is not a test failure.
+    expect(rollLine).toMatch(new RegExp(`${ABILITIES.D4.icon}[1-4](?!\\s*\\()`))
   })
 })
 
@@ -534,8 +535,11 @@ describe('loadouts in the match state', () => {
     state = playToSteal(state, rng)
     const rollLine = state.log.find((l) => l.startsWith('Lancio —'))!
     expect(rollLine).toContain(ABILITIES.STELLA_ESSICCATA.icon)
-    // "✵6 (2/6/3)" — the three faces are spelled out.
-    expect(rollLine).toMatch(/✵\d \(\d\/\d\/\d\)/)
+    // e.g. "🌟6 (2/6/3)" — the three faces are spelled out. Icon from the registry, so the
+    // assertion is about the SPLIT format and not about which glyph was chosen.
+    expect(rollLine).toMatch(
+      new RegExp(`${ABILITIES.STELLA_ESSICCATA.icon}\\d \\(\\d/\\d/\\d\\)`),
+    )
   })
 })
 

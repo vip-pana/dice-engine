@@ -108,13 +108,13 @@ mostra nome, icona e regola.
 
 | Dado | Effetto | Se resta tra i comuni |
 | --- | --- | --- |
-| ✵ Stella Essiccata | Tira 3 dadi e tiene il più alto | Vale per chi lo ruba |
-| ▲ D4 | Esce sempre 1–4: è un **malus** | Vale per chi lo ruba |
+| 🌟 Stella Essiccata | Tira 3 dadi e tiene il più alto | Vale per chi lo ruba |
+| 🔽 D4 | Esce sempre 1–4: è un **malus** | Vale per chi lo ruba |
 | 🦑 Nero di Seppia | Nasconde un dado dell'avversario fino allo showdown | Acceca **entrambi** |
 | 🪙 Dado d'Oro | Il vincitore incassa il doppio | Raddoppia per **chiunque** vinca |
 | ⚡ Dado Torpedo | Un dado scelto dell'avversario perde 1 allo showdown; 10% il campo si elettrizza e un tuo dado **a caso** perde 1 | Colpisce **entrambi** a caso |
-| ⚙ Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
-| ⬡ Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
+| 🎣 Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
+| 🧽 Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
@@ -150,12 +150,12 @@ Misura a **20.000 mani per scenario**, seed di default:
 
 | Dado | Winrate vs 4 normali |
 | --- | --- |
-| ⚙ Mulinello | 53,2% |
-| ✵ Stella Essiccata | 52,8% |
+| 🎣 Mulinello | 53,2% |
+| 🌟 Stella Essiccata | 52,8% |
 | 🦑 Nero di Seppia | 49,9% * |
 | 🪙 Dado d'Oro | 49,9% * |
 | ⚡ Dado Torpedo | 49,9% * |
-| ▲ D4 | 48,3% |
+| 🔽 D4 | 48,3% |
 
 Controllo (normali vs normali): **49,4%**, cioè ≈50% a meno del rumore di
 campionamento. Quel ±0,5% è anche il margine d'errore da tenere presente

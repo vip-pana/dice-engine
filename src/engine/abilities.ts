@@ -95,7 +95,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'STELLA_ESSICCATA',
     name: 'Stella Essiccata',
     description: 'Quando viene lanciato si divide in 3 dadi e tiene il valore più alto.',
-    icon: '✵',
+    // Emoji, not a symbol glyph: the badge is 18px and one of seven, so it has to be
+    // recognisable at a glance rather than merely distinct. A literal starfish beats an
+    // abstract asterisk nobody can name, and matches the die's own name.
+    icon: '🌟',
     kind: 'buff',
     diceRolled: 3,
     roll: (rng) => rollFaces(rng, 3),
@@ -105,7 +108,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'D4',
     name: 'D4',
     description: 'Dado a 4 facce: esce sempre un valore da 1 a 4.',
-    icon: '▲',
+    // Reads as "capped", which is what a d4 does: it can never show a 5 or a 6. Chosen over a
+    // triangle glyph (invisible next to six emoji) and over 🔻 (a warning sign, which oversells
+    // a die that is merely weak).
+    icon: '🔽',
     kind: 'malus',
     // One physical die, one face — but drawn from a 4-sided range instead of a d6.
     diceRolled: 1,
@@ -180,7 +186,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     name: 'Mulinello',
     description:
       'Oltre al rilancio normale, se il secondo risultato non ti piace puoi tirare questo dado una terza volta. Scegli dopo aver visto il risultato. Tra i comuni non fa nulla finché non lo rubi.',
-    icon: '⚙',
+    // A fishing reel has no emoji, so the rod stands in for it — nearest thing that reads as
+    // "reel it back and cast again", which is the ability. The gear glyph it replaces was
+    // generic enough to mean anything.
+    icon: '🎣',
     kind: 'buff',
     // Not ownOnly: an extra roll needs an owner to decide, and stealing one from the commons
     // supplies exactly that — seatHolds counts a stolen die, so the thief gets the choice.
@@ -201,7 +210,9 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     name: 'Dado Spugna',
     description:
       "Scegli un'abilità dell'avversario: per questa mano non ha effetto. Non funziona su Stella Essiccata e D4, che hanno già deciso la loro faccia, e non può assorbire un'altra Spugna. Tra i comuni non fa nulla finché non lo rubi.",
-    icon: '⬡',
+    // A sponge emoji exists and means exactly the ability: it soaks something up. Replaces a
+    // bare hexagon outline, which meant nothing and nearly vanished at badge size.
+    icon: '🧽',
     kind: 'buff',
     // Not ownOnly, and not spongeable. Same reasoning as the Mulinello for the first: the
     // choice needs an owner, and stealing one supplies it, so it must be able to drop among

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
   ALL_ABILITY_IDS,
+  abilitySpec,
   isSpongeable,
   chooseAction,
   evaluateHand,
@@ -1034,7 +1035,11 @@ function HumanRow({
             // A concealed die stays selectable: rerolling blind is allowed by design.
             concealed={die.concealed}
             selected={(selecting && selected.includes(i)) || i === mulinelloIndex}
-            caption={i === mulinelloIndex ? 'ritirabile ⚙' : undefined}
+            caption={
+              i === mulinelloIndex
+                ? `ritirabile ${abilitySpec('MULINELLO')?.icon}`
+                : undefined
+            }
             onClick={selecting ? () => toggle(i) : undefined}
           />
         ))}
@@ -1080,7 +1085,9 @@ function HumanRow({
             // the commons and therefore does nothing. Unlike the Torpedo there is no `disabled`
             // gate: declining to sponge is a legal move, so the choice stays optional.
             <div style={{ marginTop: 8 }}>
-              <Hint text="⬡ Dado Spugna: scegli un'abilità del Bot da annullare (facoltativo)." />
+              <Hint
+                text={`${abilitySpec('DADO_SPUGNA')?.icon} Dado Spugna: scegli un'abilità del Bot da annullare (facoltativo).`}
+              />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
                 {spongeChoices.map((id) => (
                   <AbilityCard
@@ -1221,7 +1228,7 @@ function Controls({
     return (
       <div style={rowStyle}>
         <PrimaryButton onClick={() => dispatch({ type: 'MULINELLO_ROLL', player: 'human' })}>
-          Ritira il dado ⚙
+          Ritira il dado {abilitySpec('MULINELLO')?.icon}
         </PrimaryButton>
         <SecondaryButton onClick={() => dispatch({ type: 'MULINELLO_PASS', player: 'human' })}>
           Tieni così
