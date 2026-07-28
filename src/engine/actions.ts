@@ -2,6 +2,7 @@
 // reducer can validate it is that player's turn. Discriminated on `type`.
 
 import type { PlayerId } from './gameTypes'
+import type { AbilityId } from './types'
 
 /**
  * Betting actions, valid in INITIAL_BET and SECOND_BET.
@@ -58,6 +59,23 @@ export interface RerollAction {
    * NOT ride along: it has to be answered after the reroll result exists.)
    */
   readonly torpedoTarget?: number | undefined
+  /**
+   * The opponent ability a Dado Spugna cancels for this hand.
+   *
+   * Deliberately NOT symmetric with torpedoTarget above: this one is ALWAYS optional. It is
+   * accepted whenever supplied and ignored when the seat holds no Spugna, rather than being
+   * required-iff-held. Two reasons, both concrete:
+   *
+   *  - REROLL_SELECT is sequential. If sponging the opponent's Torpedo removed their
+   *    obligation to name a victim mid-phase, their client would still send the target it
+   *    computed a moment earlier and the reducer would reject it.
+   *  - required-iff-held means every client must re-implement the ownership check. There are
+   *    already four copies of seatHolds in this repo; this would make six.
+   *
+   * The reducer still rejects a target that names a non-spongeable ability, or a Spugna: those
+   * are client bugs, not choices, and failing loudly beats a silent no-op.
+   */
+  readonly spongeTarget?: AbilityId | undefined
 }
 
 /**

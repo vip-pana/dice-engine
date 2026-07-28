@@ -65,6 +65,22 @@ export type AbilityId =
    * ability that IS a decision has nobody to make it.
    */
   | 'MULINELLO'
+  /**
+   * Soaks up one opponent ability of the holder's choosing, cancelling its effect.
+   *
+   * The first ability aimed at other ABILITIES rather than at dice, so it has to reach every
+   * point where an effect is applied (see isNullified in game.ts). Which abilities it can
+   * absorb is declared per-ability by `spongeable` on AbilitySpec, not listed here — an
+   * ability whose face is decided at roll time cannot be cancelled after the fact, because
+   * the face is already committed to Die.value and the rolled alternatives are gone.
+   *
+   * Nero di Seppia is the odd one out: it lands on entry into STEAL, long before a target can
+   * be chosen, so the sponge REVERSES it (sight comes back) rather than preventing it. The
+   * other three are all still pending when the choice is made.
+   *
+   * Chosen during REROLL_SELECT and stored as `spongeTarget` on PlayerHandState.
+   */
+  | 'DADO_SPUGNA'
 
 /**
  * A rolled die.

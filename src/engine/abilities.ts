@@ -8,13 +8,14 @@
 // when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
 // hand.ts oblivious to the roguelike layer entirely.
 //
-// Four abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// Five abilities need more than a face, so their spec below is a plain-d6 stub and the real
 // effect lives in the reducer, where the state it acts on exists:
 //   - NERO_DI_SEPPIA moves INFORMATION -> applyConcealment in game.ts
-//   - DADO_D_ORO moves COINS           -> hasGoldenPayout in game.ts
+//   - DADO_D_ORO moves COINS           -> goldenPayoutSource in game.ts
 //   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
 //   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
-// All four are named here so the pattern is discoverable from the registry. A new ability
+//   - DADO_SPUGNA cancels ANOTHER ABILITY -> isNullified in game.ts
+// All five are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
 
 import type { AbilityId, Die, DieValue } from './types'
@@ -41,6 +42,19 @@ export interface AbilitySpec {
    * yet when it is rolled, so there is nobody to target.
    */
   readonly ownOnly?: boolean
+  /**
+   * Whether a Dado Spugna can cancel this ability.
+   *
+   * Declared per-ability rather than as a list inside the reducer, so adding the Nth ability
+   * forces its author to answer the question here, next to the rules text, instead of
+   * discovering months later that the sponge silently ignores it.
+   *
+   * False (or absent) for anything that decides its own FACE when rolled: by the time a
+   * sponge target is chosen the face is already committed to `Die.value` and the alternatives
+   * it beat are gone, so there is nothing left to cancel. True only for effects that are
+   * still pending — or, for NERO_DI_SEPPIA, still reversible.
+   */
+  readonly spongeable?: boolean
   /**
    * How many raw d6 faces this ability consumes per roll. Used by the UI (to size the
    * split animation) and by simulations reasoning about entropy consumption.
@@ -114,6 +128,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6 — the die itself is ordinary. Its power is informational and
     // is applied by the reducer when the hand is dealt (see applyConcealment in game.ts),
     // because AbilitySpec is only allowed to decide faces.
+    //
+    // Spongeable by REVERSAL, not prevention: this lands on entry into STEAL, before a sponge
+    // target can be named, so the Spugna gives sight back rather than stopping the blinding.
+    spongeable: true,
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
@@ -128,8 +146,10 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Not ownOnly: an unstolen common Dado d'Oro doubles for WHOEVER wins, so it has a real
     // effect with no owner and must not be filtered out of the commons.
     // Value-wise a plain d6 — it never helps you win the hand, only what winning pays. The
-    // payout is applied by the reducer at resolveHand time (see hasGoldenPayout in game.ts),
-    // because AbilitySpec is only allowed to decide faces.
+    // payout is applied by the reducer at resolveHand time (see goldenPayoutSource in
+    // game.ts), because AbilitySpec is only allowed to decide faces.
+    // Spongeable: the doubling is still pending when a target is chosen.
+    spongeable: true,
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
@@ -148,6 +168,9 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6. Its power is a -1 on someone else's die, applied by the reducer
     // at showdown time (see applyTorpedoes in game.ts), because AbilitySpec is only allowed
     // to decide faces — and because applying it any earlier would let a reroll undo it.
+    // Spongeable: the -1 has not landed yet when a target is chosen. Note a sponged Torpedo
+    // still CONSUMES its Rng draws (see applyTorpedoes) — only the damage is cancelled.
+    spongeable: true,
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
@@ -167,10 +190,34 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6, like the Torpedo. Its power is a THIRD roll of this same die,
     // offered in MULINELLO_SELECT (see handleMulinello in game.ts) — a spec may only decide
     // faces, and this one has to wait for the player to see the second result first.
+    // Spongeable: cancelling it skips MULINELLO_SELECT for that seat entirely.
+    spongeable: true,
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
   },
+  DADO_SPUGNA: {
+    id: 'DADO_SPUGNA',
+    name: 'Dado Spugna',
+    description:
+      "Scegli un'abilità dell'avversario: per questa mano non ha effetto. Non funziona su Stella Essiccata e D4, che hanno già deciso la loro faccia, e non può assorbire un'altra Spugna. Tra i comuni non fa nulla finché non lo rubi.",
+    icon: '⬡',
+    kind: 'buff',
+    // Not ownOnly, and not spongeable. Same reasoning as the Mulinello for the first: the
+    // choice needs an owner, and stealing one supplies it, so it must be able to drop among
+    // the commons. Not spongeable by explicit design call — a sponge war would resolve by
+    // seat order, which would make the primary role decide it rather than the players.
+    // Value-wise a plain d6. Its power is the absence of someone else's power, applied
+    // wherever an effect is read (see isNullified in game.ts).
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
+}
+
+/** Whether a Dado Spugna is allowed to cancel `ability`. */
+export function isSpongeable(ability: AbilityId): boolean {
+  return ABILITIES[ability].spongeable === true
 }
 
 /** Looks up an ability spec, or null for a plain die. */

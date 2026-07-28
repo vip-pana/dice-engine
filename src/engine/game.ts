@@ -6,7 +6,7 @@
 // send legal actions; tests assert the guards).
 
 import { evaluateHand, compareHands } from './hand'
-import { abilitySpec, rerollDie } from './abilities'
+import { abilitySpec, isSpongeable, rerollDie } from './abilities'
 import {
   rollOwnDice,
   rollCommonDice,
@@ -49,6 +49,7 @@ function emptyHandState(): PlayerHandState {
     concealedIndices: [],
     torpedoTarget: null,
     mulinelloUsed: false,
+    spongeTarget: null,
   }
 }
 
@@ -268,7 +269,14 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
     case 'STEAL':
       return handleSteal(state, action.player, action.commonIndex)
     case 'REROLL':
-      return handleReroll(state, action.player, action.ownIndices, action.torpedoTarget, rng)
+      return handleReroll(
+        state,
+        action.player,
+        action.ownIndices,
+        action.torpedoTarget,
+        action.spongeTarget,
+        rng,
+      )
     case 'MULINELLO_ROLL':
       return handleMulinello(state, action.player, true, rng)
     case 'MULINELLO_PASS':
@@ -545,17 +553,13 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
 }
 
 /**
- * Index of a common die carrying `ability` while it is still unclaimed, or null.
- *
- * Returns null once that die has been stolen: at that point it is a seat's die, not a table
- * effect, so any "applies to both" rule stops holding. Shared by the two abilities with a
- * table-wide form — NERO_DI_SEPPIA (blinds both) and DADO_D_ORO (doubles for whoever wins).
- */
-/**
  * Whether `seat` owns a die carrying `ability` — among its 4 own dice or as its stolen die.
  *
  * The stolen die counts: taking a special from the commons is the intended way to acquire
  * one, so an ability must work the same whether it was dealt or stolen.
+ *
+ * RAW ownership, ignoring any Dado Spugna. Most effects want `seatHoldsActive` instead; this
+ * one is for the two places that must answer "is the die physically there" regardless.
  */
 function seatHolds(state: GameState, seat: PlayerId, ability: AbilityId): boolean {
   const hand = state.hands[seat]
@@ -564,6 +568,15 @@ function seatHolds(state: GameState, seat: PlayerId, ability: AbilityId): boolea
   )
 }
 
+/**
+ * Index of a common die carrying `ability` while it is still unclaimed, or null.
+ *
+ * Returns null once that die has been stolen: at that point it is a seat's die, not a table
+ * effect, so any "applies to both" rule stops holding. Shared by the two abilities with a
+ * table-wide form — NERO_DI_SEPPIA (blinds both) and DADO_D_ORO (doubles for whoever wins).
+ *
+ * Like seatHolds, this ignores Spugne — see `unclaimedCommonActiveFor`, which does not.
+ */
 function unclaimedCommonIndex(state: GameState, ability: AbilityId): number | null {
   if (state.common === null) {
     return null
@@ -573,6 +586,51 @@ function unclaimedCommonIndex(state: GameState, ability: AbilityId): number | nu
     return null
   }
   return index
+}
+
+/**
+ * Whether `seat` has soaked up `ability` with its own Dado Spugna.
+ *
+ * ONE seat, ONE question: "did this seat cancel that ability?" Every caller has to name the
+ * seat holding the sponge — the protected one — and never the seat whose effect is firing. An
+ * earlier draft folded the opponent lookup in here and got the direction silently backwards
+ * for table effects, protecting the wrong player; keeping the helper direction-free means each
+ * call site has to state who is protected, out loud, where a reader can check it.
+ *
+ * `spongeTarget` is only ever set to a spongeable id, and only for a seat that really holds a
+ * Spugna (handleReroll enforces both), so there is nothing left to re-derive here.
+ */
+function hasSponged(state: GameState, seat: PlayerId, ability: AbilityId): boolean {
+  return state.hands[seat].spongeTarget === ability
+}
+
+/**
+ * Ownership AND not cancelled by the opponent — the form nearly every effect wants.
+ *
+ * `seat` is the ability's OWNER here, so the sponge to check is the other seat's: the victim is
+ * the one with a reason to have cancelled it.
+ *
+ * Deliberately a separate function rather than folded into `seatHolds`: two call sites must NOT
+ * nullify (the reroll-target validation and handleMulinello's legality guard, both marked at
+ * their site), and a helper that silently nullified everywhere would break them.
+ */
+function seatHoldsActive(state: GameState, seat: PlayerId, ability: AbilityId): boolean {
+  return seatHolds(state, seat, ability) && !hasSponged(state, otherPlayer(seat), ability)
+}
+
+/**
+ * `unclaimedCommonIndex`, unless `protectedSeat` has sponged that ability.
+ *
+ * Per-seat, because a table effect is now asymmetric: one seat may have soaked up the common
+ * Torpedo while the other still eats it. The parameter is named for what it means — the seat
+ * being spared — because "seat" alone is exactly the ambiguity that produced a reversed check.
+ */
+function unclaimedCommonActiveFor(
+  state: GameState,
+  protectedSeat: PlayerId,
+  ability: AbilityId,
+): number | null {
+  return hasSponged(state, protectedSeat, ability) ? null : unclaimedCommonIndex(state, ability)
 }
 
 /**
@@ -595,6 +653,37 @@ function releaseCommonConcealment(state: GameState, stealer: PlayerId): GameStat
   return withLog(
     setHand(state, stealer, { concealedIndices: [] }),
     `Nero di Seppia rubato da ${labelOf(stealer)}: ora il malus colpisce solo ${labelOf(otherPlayer(stealer))}.`,
+  )
+}
+
+/**
+ * Gives a sponging seat its sight back, when what it sponged was a Nero di Seppia.
+ *
+ * The one ability the Spugna REVERSES rather than prevents. applyConcealment runs on entry
+ * into STEAL, long before a sponge target can be named, so by the time this fires the dice are
+ * already hidden — there is nothing left to stop, only something to undo.
+ *
+ * Unlike releaseCommonConcealment, this clears the concealment whatever its source: the sponge
+ * cancels the ABILITY, so it does not matter whether the blinding came from the opponent's own
+ * die or from an unstolen common one.
+ *
+ * ORDER MATTERS, and unequally. REROLL_SELECT is sequential, so the primary sponges before
+ * choosing its reroll and gets its sight back in time to use it; the non-primary sends both in
+ * one action and the dice are thrown immediately after, so it recovers sight only for the
+ * second bet. That is a real power difference attached to the primary role — documented rather
+ * than levelled, since the roll-off already confers first-mover advantage everywhere else.
+ */
+function restoreSightIfSponged(
+  state: GameState,
+  player: PlayerId,
+  target: AbilityId,
+): GameState {
+  if (target !== 'NERO_DI_SEPPIA' || state.hands[player].concealedIndices.length === 0) {
+    return state
+  }
+  return withLog(
+    setHand(state, player, { concealedIndices: [] }),
+    `Il Nero di Seppia è assorbito: ${labelOf(player)} rivede tutti i suoi dadi.`,
   )
 }
 
@@ -706,6 +795,7 @@ function handleReroll(
   player: PlayerId,
   ownIndices: readonly number[],
   torpedoTarget: number | undefined,
+  spongeTarget: AbilityId | undefined,
   rng: Rng,
 ): GameState {
   assert(state.phase === 'REROLL_SELECT', 'REROLL only allowed in REROLL_SELECT')
@@ -715,6 +805,12 @@ function handleReroll(
   // The Torpedo's victim is picked here but zapped at the showdown. Required if and only if
   // this seat holds one: demanding it stops a client from silently forfeiting the effect,
   // and rejecting it otherwise stops one from zapping without the die.
+  //
+  // seatHolds, NOT seatHoldsActive — deliberately. This asks "is the die there", which a
+  // Spugna does not change. A sponged Torpedo still names its victim and still logs the aim;
+  // only the damage is cancelled, at apply time. Nullifying here instead would break this
+  // phase's sequential order: the opponent may sponge AFTER this seat's client already
+  // computed a target, and the else-branch below would then reject a perfectly good action.
   const holdsTorpedo = seatHolds(state, player, 'DADO_TORPEDO')
   if (holdsTorpedo) {
     assert(torpedoTarget !== undefined, 'a Dado Torpedo must choose a target die')
@@ -726,6 +822,21 @@ function handleReroll(
     assert(torpedoTarget === undefined, 'only a Dado Torpedo holder may choose a target')
   }
 
+  // The Spugna's target, by contrast, is never REQUIRED and never rejected for lack of the
+  // die — see RerollAction's comment for why the asymmetry is deliberate. What IS rejected is
+  // a target that cannot be sponged: a client naming a Stella or another Spugna has a bug,
+  // and a silent no-op would hide it.
+  if (spongeTarget !== undefined) {
+    assert(
+      spongeTarget !== 'DADO_SPUGNA',
+      'a Dado Spugna cannot absorb another Dado Spugna',
+    )
+    assert(
+      isSpongeable(spongeTarget),
+      `${spongeTarget} cannot be absorbed: its face is decided when the die is rolled`,
+    )
+  }
+
   const unique = [...new Set(ownIndices)]
   assert(unique.length === ownIndices.length, 'duplicate reroll indices')
   assert(
@@ -735,9 +846,13 @@ function handleReroll(
   assert(unique.length <= MAX_REROLL, `at most ${MAX_REROLL} own dice may be rerolled`)
   // All 4 own dice may be rerolled; only the stolen die is fixed (and is not indexable here).
 
+  // Recorded whether or not this seat holds a Spugna: isNullified is only ever consulted for a
+  // seat that does, so an ignored target costs nothing and keeps every client simple.
+  const sponges = spongeTarget !== undefined && seatHolds(state, player, 'DADO_SPUGNA')
   let next = setHand(state, player, {
     rerollSelection: unique,
     torpedoTarget: torpedoTarget ?? null,
+    spongeTarget: sponges ? spongeTarget : null,
   })
   next = withLog(
     next,
@@ -752,6 +867,13 @@ function handleReroll(
       next,
       `${labelOf(player)} punta il Dado Torpedo sul dado ${torpedoTarget + 1} di ${labelOf(otherPlayer(player))}.`,
     )
+  }
+  if (sponges) {
+    next = withLog(
+      next,
+      `${labelOf(player)} usa il Dado Spugna su ${abilitySpec(spongeTarget)?.name}.`,
+    )
+    next = restoreSightIfSponged(next, player, spongeTarget!)
   }
 
   const nonPrimary = otherPlayer(state.primary)
@@ -816,7 +938,7 @@ function firstMulinelloSeat(state: GameState): PlayerId | null {
 
 /** Whether `seat` holds an unspent Mulinello. */
 function canUseMulinello(state: GameState, seat: PlayerId): boolean {
-  return seatHolds(state, seat, 'MULINELLO') && !state.hands[seat].mulinelloUsed
+  return seatHoldsActive(state, seat, 'MULINELLO') && !state.hands[seat].mulinelloUsed
 }
 
 /**
@@ -836,6 +958,9 @@ function handleMulinello(
 ): GameState {
   assert(state.phase === 'MULINELLO_SELECT', 'MULINELLO only allowed in MULINELLO_SELECT')
   assert(state.toAct === player, 'not this player to use a Mulinello')
+  // seatHolds, not seatHoldsActive: this guard answers "is the action legal at all", and a
+  // sponged seat is already filtered out by canUseMulinello, which decides who is ever `toAct`
+  // in this phase. Nullifying here too could desync the two-holder queue.
   assert(seatHolds(state, player, 'MULINELLO'), 'only a Mulinello holder may act here')
   assert(!state.hands[player].mulinelloUsed, 'the Mulinello extra roll is once per hand')
 
@@ -994,6 +1119,8 @@ function applyTorpedoes(
   const logs: string[] = []
 
   for (const seat of ['human', 'bot'] as const) {
+    // seatHolds, not seatHoldsActive, and the check must stay ABOVE the draws: a seat with no
+    // Torpedo consumes nothing, which is the stream shape every seed was recorded against.
     if (!seatHolds(state, seat, 'DADO_TORPEDO')) {
       continue
     }
@@ -1002,6 +1129,18 @@ function applyTorpedoes(
     // Always drawn, in this order, so the stream does not depend on either outcome.
     const electrifies = rng.next() < TORPEDO_FIELD_CHANCE
     const selfIndex = rng.nextInt(0, 3)
+
+    // A sponged Torpedo is drawn for and then discarded. Skipping the two draws above instead
+    // would shift every later roll in the hand, which is exactly what the fixed-draw rule in
+    // this function's doc comment exists to prevent — the die is present, so it costs its
+    // entropy whether or not the damage lands.
+    // The VICTIM is the one who may have sponged it — they are the seat being spared.
+    if (hasSponged(state, victim, 'DADO_TORPEDO')) {
+      logs.push(
+        `Dado Spugna di ${labelOf(victim)}: il Dado Torpedo di ${labelOf(seat)} è assorbito.`,
+      )
+      continue
+    }
 
     if (target !== null) {
       const before = next[victim][target]!.value
@@ -1019,10 +1158,19 @@ function applyTorpedoes(
     }
   }
 
-  // An unclaimed common Torpedo has no owner, so nobody chose: a random die each.
+  // An unclaimed common Torpedo has no owner, so nobody chose: a random die each. A Spugna
+  // makes this asymmetric — one seat may have soaked it up while the other still eats it —
+  // so the nullify check is INSIDE the loop and, again, AFTER that seat's draw.
   if (unclaimedCommonIndex(state, 'DADO_TORPEDO') !== null) {
     for (const seat of ['human', 'bot'] as const) {
       const index = rng.nextInt(0, 3)
+      // No owner to blame, so the seat about to be hit is also the seat that may have sponged.
+      if (hasSponged(state, seat, 'DADO_TORPEDO')) {
+        logs.push(
+          `Dado Spugna di ${labelOf(seat)}: il Dado Torpedo tra i comuni non lo colpisce.`,
+        )
+        continue
+      }
       const before = next[seat][index]!.value
       next = { ...next, [seat]: withZappedOwn(next[seat], index) }
       logs.push(
@@ -1116,10 +1264,15 @@ function describeShowdown(
  * case `own`/`stolen` are null and only the table source can apply.
  */
 function goldenPayoutSource(state: GameState, winner: PlayerId): 'held' | 'table' | null {
-  if (seatHolds(state, winner, 'DADO_D_ORO')) {
+  // Sponge-aware, and the seat doing the sponging is the LOSER — the only one who gains from
+  // cancelling a payout. seatHoldsActive takes the ability's owner (the winner) and looks up
+  // the other seat itself; the table branch takes the protected seat, so it needs the loser
+  // named explicitly. Two different parameter meanings, which is why they read differently.
+  const loser = otherPlayer(winner)
+  if (seatHoldsActive(state, winner, 'DADO_D_ORO')) {
     return 'held'
   }
-  return unclaimedCommonIndex(state, 'DADO_D_ORO') !== null ? 'table' : null
+  return unclaimedCommonActiveFor(state, loser, 'DADO_D_ORO') !== null ? 'table' : null
 }
 
 /**

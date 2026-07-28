@@ -595,23 +595,51 @@ describe('random ability drops', () => {
   })
 
   it('ownChance is the per-ability chance of appearing in the hand', () => {
-    const rng = createRng(77)
+    // Measured ONE ability at a time, which is the only configuration where the claim is
+    // actually true. With a pool bigger than the 4 slots, drawAbilitySlots starves whichever
+    // abilities come last in registry order (see the saturation test below) — so a whole-pool
+    // version of this test asserts something the code does not promise, and was already
+    // passing by a margin of 0.008 at six abilities.
+    const trials = 20_000
+    for (const id of ALL_ABILITY_IDS) {
+      const rng = createRng(77)
+      const drops = { ownChance: 0.35, commonChance: 0, pool: [id] }
+      let hits = 0
+      for (let i = 0; i < trials; i++) {
+        if (countsByAbility(rollRandomLoadout(rng, drops)).size > 0) hits++
+      }
+      const rate = hits / trials
+      expect(rate).toBeGreaterThan(drops.ownChance - 0.02)
+      expect(rate).toBeLessThan(drops.ownChance + 0.02)
+    }
+  })
+
+  it('starves later registry entries once the pool outgrows the 4 slots', () => {
+    // The flip side of the test above, asserted rather than left as a surprise. Slots are
+    // claimed in registry order and never stolen back, so with more abilities than slots the
+    // tail of ALL_ABILITY_IDS loses out. Worth pinning: it means registry ORDER is a balance
+    // decision, and appending an ability quietly makes it the rarest one.
+    const rng = createRng(31)
     const drops = { ownChance: 0.35, commonChance: 0, pool: ALL_ABILITY_IDS }
     const trials = 20_000
     const hits = new Map<AbilityId, number>()
     for (let i = 0; i < trials; i++) {
-      for (const [id] of countsByAbility(rollRandomLoadout(rng, drops))) {
+      const counts = countsByAbility(rollRandomLoadout(rng, drops))
+      // Never more specials than there are dice, whatever the pool size.
+      expect([...counts.values()].reduce((n, c) => n + c, 0)).toBeLessThanOrEqual(4)
+      for (const [id] of counts) {
         hits.set(id, (hits.get(id) ?? 0) + 1)
       }
     }
-    // Each ability independently lands in ~ownChance of hands. Bounds derived from the
-    // configured chance rather than hardcoded: the old +-0.02 was tight enough that simply
-    // registering another ability could tip one id's sampling noise past it.
-    for (const id of ALL_ABILITY_IDS) {
-      const rate = (hits.get(id) ?? 0) / trials
-      expect(rate).toBeGreaterThan(drops.ownChance - 0.03)
-      expect(rate).toBeLessThan(drops.ownChance + 0.03)
-    }
+    const rateOf = (id: AbilityId): number => (hits.get(id) ?? 0) / trials
+    const first = ALL_ABILITY_IDS[0]!
+    const last = ALL_ABILITY_IDS[ALL_ABILITY_IDS.length - 1]!
+
+    // The head of the registry still gets its nominal rate; the tail is measurably squeezed.
+    expect(rateOf(first)).toBeGreaterThan(0.33)
+    expect(rateOf(last)).toBeLessThan(rateOf(first))
+    // Nobody is starved outright — the effect is a bias, not an exclusion.
+    expect(rateOf(last)).toBeGreaterThan(0.25)
   })
 
   it('spreads a special across all 4 slots, roughly uniformly', () => {
@@ -1565,6 +1593,327 @@ describe('MULINELLO: an optional third roll, chosen after seeing the second', ()
     const s = playToSteal(createInitialState({ loadouts: { human: MULINELLO_ONLY } }), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.MULINELLO.icon)
+  })
+})
+
+describe('DADO_SPUGNA: soaks up one opponent ability', () => {
+  const SPUGNA_ONLY: Loadout = ['DADO_SPUGNA', null, null, null]
+  const TORPEDO: Loadout = ['DADO_TORPEDO', null, null, null]
+
+  /** Sum of a seat's 4 own-dice values. */
+  const ownSum = (s: ReturnType<typeof createInitialState>, seat: 'human' | 'bot'): number =>
+    s.hands[seat].own!.reduce((n, d) => n + d.value, 0)
+
+  /**
+   * STEAL -> both seats keep everything, `player` sponging `target`. Stops wherever the phase
+   * machine lands, so callers can assert on MULINELLO_SELECT vs SECOND_BET.
+   */
+  function playToSponge(
+    start: ReturnType<typeof createInitialState>,
+    rng: ReturnType<typeof createRng>,
+    player: 'human' | 'bot',
+    target: AbilityId,
+    steals: readonly [number, number] = [0, 1],
+  ): ReturnType<typeof createInitialState> {
+    const np = other(start.primary)
+    let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: steals[0] }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: steals[1] }, rng)
+    for (const seat of [s.primary, np] as const) {
+      const base = rerollAction(s, seat, [])
+      s = reducer(s, seat === player ? { ...base, spongeTarget: target } : base, rng)
+    }
+    return s
+  }
+
+  it('rolls a plain d6 — its power is the absence of someone else\'s', () => {
+    const rng = createRng(601)
+    const spec = ABILITIES.DADO_SPUGNA
+    let sum = 0
+    const trials = 400
+    for (let i = 0; i < trials; i++) {
+      const rolls = spec.roll(rng)
+      expect(rolls).toHaveLength(1)
+      sum += spec.resolve(rolls)
+    }
+    expect(Math.abs(sum / trials - 3.5)).toBeLessThan(0.4)
+  })
+
+  it('cancels a held Torpedo: no zap, and the victim keeps every value', () => {
+    const rng = createRng(602)
+    const start = playToSteal(
+      createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
+      rng,
+    )
+    let s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
+    const before = ownSum(s, 'human')
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+    s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+
+    // Anchored: the absorb line itself contains "il Dado Torpedo di", so a loose match would
+    // find the very message that proves the zap did NOT happen.
+    expect(s.log.some((l) => /^Dado Torpedo di/.test(l))).toBe(false)
+    expect(s.log.some((l) => /Dado Spugna di .*è assorbito/.test(l))).toBe(true)
+    expect(ownSum(s, 'human')).toBe(before)
+  })
+
+  it('consumes the same rng draws whether or not the Torpedo is sponged', () => {
+    // The project's fixed-draw rule. A sponged Torpedo is still PRESENT, so it must still pay
+    // its two draws (the field roll and the self index) — skipping them would shift every
+    // later roll and break seeded replay.
+    const counted = (sponge: boolean): { next: number; nextInt: number } => {
+      const inner = createRng(603)
+      const counts = { next: 0, nextInt: 0 }
+      const rng = {
+        next: () => {
+          counts.next++
+          return inner.next()
+        },
+        nextInt: (a: number, b: number) => {
+          counts.nextInt++
+          return inner.nextInt(a, b)
+        },
+        rollDie: () => inner.rollDie(),
+      }
+      const start = playToSteal(
+        createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
+        rng,
+      )
+      let s = sponge
+        ? playToSponge(start, rng, 'human', 'DADO_TORPEDO')
+        : playToSponge(start, rng, 'human', 'DADO_D_ORO')
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+      return counts
+    }
+    const sponged = counted(true)
+    const notSponged = counted(false)
+    expect(sponged.next).toBe(notSponged.next)
+    expect(sponged.nextInt).toBe(notSponged.nextInt)
+  })
+
+  it('cancels a common Torpedo for the sponging seat only', () => {
+    const rng = createRng(604)
+    let s = playToSteal(
+      createInitialState({
+        loadouts: { human: SPUGNA_ONLY },
+        abilityDrops: { ownChance: 0, commonChance: 1, pool: ['DADO_TORPEDO' as AbilityId] },
+      }),
+      rng,
+    )
+    const at = s.common!.findIndex((d) => d.ability === 'DADO_TORPEDO')
+    expect(at).toBeGreaterThanOrEqual(0)
+    // Both seats steal something else, so the Torpedo stays on the table and hits both.
+    const others = [0, 1, 2].filter((i) => i !== at)
+    s = playToSponge(s, rng, 'human', 'DADO_TORPEDO', [others[0]!, others[1]!])
+    const beforeHuman = ownSum(s, 'human')
+    const beforeBot = ownSum(s, 'bot')
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+    s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+
+    // The human is spared; the bot is not.
+    expect(s.log.some((l) => /Dado Spugna di Tu: il Dado Torpedo tra i comuni/.test(l))).toBe(true)
+    expect(ownSum(s, 'human')).toBe(beforeHuman)
+    expect(ownSum(s, 'bot')).toBeLessThanOrEqual(beforeBot)
+    expect(s.log.some((l) => /Dado Torpedo tra i comuni: il dado \d+ di Bot/.test(l))).toBe(true)
+  })
+
+  it('cancels a held Dado d\'Oro: the winner collects the pot once', () => {
+    // Bot holds the Oro; the human sponges it. Play until the bot wins a hand, then check the
+    // payout was single. Loops seeds because who wins a hand is not ours to choose.
+    let checked = 0
+    for (let seed = 0; seed < 60 && checked === 0; seed++) {
+      const rng = createRng(6100 + seed)
+      const start = playToSteal(
+        createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: ['DADO_D_ORO', null, null, null] } }),
+        rng,
+      )
+      let s = playToSponge(start, rng, 'human', 'DADO_D_ORO')
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      const beforeBot = s.bankroll.bot
+      const potBefore = s.pot
+      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+      if (s.lastShowdown?.outcome.kind !== 'win' || s.lastShowdown.outcome.winner !== 'bot') {
+        continue
+      }
+      // Anchored: the sponge's own line names the ability it cancelled, so a loose match would
+      // hit "usa il Dado Spugna su Dado d'Oro" and read as a doubling that never happened.
+      expect(s.log.some((l) => /^Dado d'Oro \(/.test(l))).toBe(false)
+      expect(s.bankroll.bot - beforeBot).toBeLessThanOrEqual(potBefore * 2)
+      checked++
+    }
+    expect(checked).toBe(1)
+  })
+
+  it('cancels a Mulinello: MULINELLO_SELECT is skipped entirely', () => {
+    const rng = createRng(605)
+    const start = playToSteal(
+      createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: ['MULINELLO', null, null, null] } }),
+      rng,
+    )
+    const s = playToSponge(start, rng, 'human', 'MULINELLO')
+    expect(s.phase).toBe('SECOND_BET')
+  })
+
+  it('with two Mulinelli and one sponged, the phase still opens for the other', () => {
+    // The queue must not desync: firstMulinelloSeat skips the sponged seat and hands off.
+    const rng = createRng(606)
+    const start = playToSteal(
+      createInitialState({
+        loadouts: { human: ['DADO_SPUGNA', 'MULINELLO', null, null], bot: ['MULINELLO', null, null, null] },
+      }),
+      rng,
+    )
+    const s = playToSponge(start, rng, 'human', 'MULINELLO')
+    // The bot's Mulinello is cancelled, the human's is not.
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    expect(s.toAct).toBe('human')
+    const after = reducer(s, { type: 'MULINELLO_PASS', player: 'human' }, rng)
+    expect(after.phase).toBe('SECOND_BET')
+  })
+
+  it('restores sight when it soaks up a Nero di Seppia', () => {
+    const rng = createRng(607)
+    const start = playToSteal(
+      createInitialState({
+        loadouts: { human: SPUGNA_ONLY, bot: ['NERO_DI_SEPPIA', null, null, null] },
+      }),
+      rng,
+    )
+    expect(start.hands.human.concealedIndices).toHaveLength(1)
+    const s = playToSponge(start, rng, 'human', 'NERO_DI_SEPPIA')
+    expect(s.hands.human.concealedIndices).toHaveLength(0)
+    expect(s.log.some((l) => /rivede tutti i suoi dadi/.test(l))).toBe(true)
+  })
+
+  it('restores sight whichever seat order the sponge holder acts in', () => {
+    // Works from both roles, though the primary gets more out of it — it regains sight before
+    // choosing its reroll, while the non-primary only benefits from the second bet onward.
+    let sawPrimary = false
+    let sawNonPrimary = false
+    for (let seed = 0; seed < 40 && !(sawPrimary && sawNonPrimary); seed++) {
+      const rng = createRng(6200 + seed)
+      const start = playToSteal(
+        createInitialState({
+          loadouts: { human: SPUGNA_ONLY, bot: ['NERO_DI_SEPPIA', null, null, null] },
+        }),
+        rng,
+      )
+      const s = playToSponge(start, rng, 'human', 'NERO_DI_SEPPIA')
+      expect(s.hands.human.concealedIndices).toHaveLength(0)
+      if (start.primary === 'human') sawPrimary = true
+      else sawNonPrimary = true
+    }
+    expect(sawPrimary).toBe(true)
+    expect(sawNonPrimary).toBe(true)
+  })
+
+  it('cannot absorb another Dado Spugna', () => {
+    const rng = createRng(608)
+    let s = playToSteal(
+      createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: SPUGNA_ONLY } }),
+      rng,
+    )
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    expect(() =>
+      reducer(
+        s,
+        { type: 'REROLL', player: s.primary, ownIndices: [], spongeTarget: 'DADO_SPUGNA' },
+        rng,
+      ),
+    ).toThrow(/cannot absorb another Dado Spugna/)
+  })
+
+  it('rejects an ability whose face is already decided', () => {
+    const rng = createRng(609)
+    let s = playToSteal(createInitialState({ loadouts: { human: SPUGNA_ONLY } }), rng)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    for (const id of ['STELLA_ESSICCATA', 'D4'] as const) {
+      expect(() =>
+        reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [], spongeTarget: id }, rng),
+      ).toThrow(/cannot be absorbed/)
+    }
+  })
+
+  it('ignores a target from a seat holding no Spugna, rather than rejecting it', () => {
+    // Pins the always-optional contract: clients never have to check ownership, which is why
+    // the bot, the UI and four test helpers all needed no changes for this ability.
+    const rng = createRng(610)
+    const start = playToSteal(createInitialState({ loadouts: { bot: TORPEDO } }), rng)
+    const s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
+    expect(s.hands.human.spongeTarget).toBeNull()
+  })
+
+  it('does nothing while it sits unstolen among the commons', () => {
+    const rng = createRng(611)
+    let s = playToSteal(
+      createInitialState({
+        abilityDrops: { ownChance: 0, commonChance: 1, pool: ['DADO_SPUGNA' as AbilityId] },
+      }),
+      rng,
+    )
+    const at = s.common!.findIndex((d) => d.ability === 'DADO_SPUGNA')
+    expect(at).toBeGreaterThanOrEqual(0)
+    const others = [0, 1, 2].filter((i) => i !== at)
+    const np = other(s.primary)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: others[1]! }, rng)
+    s = reducer(s, { ...rerollAction(s, s.primary, []), spongeTarget: 'MULINELLO' }, rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+    expect(s.hands[s.primary].spongeTarget).toBeNull()
+  })
+
+  it('works when stolen from the commons', () => {
+    const rng = createRng(612)
+    let s = playToSteal(
+      createInitialState({
+        loadouts: { bot: TORPEDO },
+        abilityDrops: { ownChance: 0, commonChance: 1, pool: ['DADO_SPUGNA' as AbilityId] },
+      }),
+      rng,
+    )
+    const at = s.common!.findIndex((d) => d.ability === 'DADO_SPUGNA')
+    expect(at).toBeGreaterThanOrEqual(0)
+    // The human must be the one to steal it, so aim the steals accordingly.
+    const np = other(s.primary)
+    const otherIndex = [0, 1, 2].find((i) => i !== at)!
+    s =
+      s.primary === 'human'
+        ? reducer(s, { type: 'STEAL', player: 'human', commonIndex: at }, rng)
+        : reducer(s, { type: 'STEAL', player: s.primary, commonIndex: otherIndex }, rng)
+    s =
+      s.primary === 'human'
+        ? reducer(s, { type: 'STEAL', player: np, commonIndex: otherIndex }, rng)
+        : reducer(s, { type: 'STEAL', player: 'human', commonIndex: at }, rng)
+    expect(s.hands.human.stolen!.ability).toBe('DADO_SPUGNA')
+
+    for (const seat of [s.primary, np] as const) {
+      const base = rerollAction(s, seat, [])
+      s = reducer(s, seat === 'human' ? { ...base, spongeTarget: 'DADO_TORPEDO' } : base, rng)
+    }
+    expect(s.hands.human.spongeTarget).toBe('DADO_TORPEDO')
+  })
+
+  it('is deterministic: same seed and actions give the same log', () => {
+    const run = (): ReturnType<typeof createInitialState> => {
+      const rng = createRng(613)
+      const start = playToSteal(
+        createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
+        rng,
+      )
+      let s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      return reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+    }
+    expect(run().log).toEqual(run().log)
+  })
+
+  it('shows its icon in the action log like any other special', () => {
+    const rng = createRng(614)
+    const s = playToSteal(createInitialState({ loadouts: { human: SPUGNA_ONLY } }), rng)
+    const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
+    expect(rollLine).toContain(ABILITIES.DADO_SPUGNA.icon)
   })
 })
 

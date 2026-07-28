@@ -2,7 +2,7 @@
 // Kept separate from the hand-evaluation types (types.ts) so the two concerns stay tidy.
 // Still pure data: string-literal unions + readonly structs, portable to GDScript/C#.
 
-import type { Die, EvaluatedHand } from './types'
+import type { AbilityId, Die, EvaluatedHand } from './types'
 import type { AbilityDropConfig, Loadout, OwnDice } from './strategy'
 import type { Deck } from './deck'
 
@@ -130,6 +130,22 @@ export interface PlayerHandState {
    * and would otherwise wipe the effect for free.
    */
   readonly torpedoTarget: number | null
+  /**
+   * The OPPONENT ability this seat's Dado Spugna cancels for the hand, or null.
+   *
+   * Chosen during REROLL_SELECT, like torpedoTarget, but consumed differently: it is read
+   * wherever an effect would fire (see isNullified in game.ts) rather than at one moment.
+   * Identified by AbilityId alone, which cancels EVERY instance acting against this seat —
+   * the opponent's held copy and any unstolen common one. "The sponge soaks up the ability",
+   * not one physical die: dice have no stable identity here (a reroll rebuilds them), so an
+   * id is the only thing that survives the hand.
+   *
+   * Set even when this seat holds no Spugna — the field is accepted and simply never read in
+   * that case. That is deliberate: requiring it only when held would force every client
+   * (bot, UI, four test helpers) to duplicate the ownership check, and would break mid-phase
+   * when one seat sponges the other's Torpedo after that seat already computed its target.
+   */
+  readonly spongeTarget: AbilityId | null
 }
 
 /** Outcome of a completed hand. There is no fold in the first round; see FoldAction. */

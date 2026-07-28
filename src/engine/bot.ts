@@ -13,7 +13,7 @@ import {
 } from './strategy'
 import { exactRerollEV } from './optimal'
 import type { Rng } from './rng'
-import type { Hand } from './types'
+import type { AbilityId, Hand } from './types'
 import type { Action } from './actions'
 import { maxBetFor } from './game'
 import { viewFor } from './view'
@@ -205,20 +205,76 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
   // separate change.
   const victim = otherPlayer(player)
   const victimHand = state.hands[victim]
-  if (holdsTorpedo(h) && victimHand.own !== null && victimHand.stolen !== null) {
+  const sponge = chooseSponge(state, player)
+  const base = { type: 'REROLL' as const, player, ownIndices: indices }
+  const withSponge = sponge === null ? base : { ...base, spongeTarget: sponge }
+
+  if (holdsAbility(h, 'DADO_TORPEDO') && victimHand.own !== null && victimHand.stolen !== null) {
     const target = chooseTorpedoTarget(victimHand.own, victimHand.stolen)
-    return { type: 'REROLL', player, ownIndices: indices, torpedoTarget: target }
+    return { ...withSponge, torpedoTarget: target }
   }
-  return { type: 'REROLL', player, ownIndices: indices }
+  return withSponge
 }
 
-/** Whether this hand carries a Dado Torpedo, among its own dice or as its stolen die. */
-function holdsTorpedo(hand: GameState['hands'][PlayerId]): boolean {
+/**
+ * Which opponent ability to soak up with a Dado Spugna, or null when there is nothing to take.
+ *
+ * A RANKING, not an EV calculation, and deliberately so. `exactRerollEV` prices dice faces; it
+ * cannot price information, coins, or damage that has not landed, and there is no opponent model
+ * in this codebase to price them against. A fabricated EV number here would look rigorous and be
+ * arbitrary, so the order below is stated as the judgement call it is:
+ *
+ *  1. TORPEDO — the only strictly-negative effect aimed at us, and the only one whose cost we
+ *     can actually quantify (a -1 on the die chooseTorpedoTarget says we can least afford).
+ *  2. DADO_D_ORO — doubles what they collect. Cancelling it is worth a whole pot, but only in
+ *     the branch where they win, so it ranks below a certain loss.
+ *  3. MULINELLO — priced with the same quantity chooseMulinello uses on our own behalf, so the
+ *     bot never disagrees with itself about what an extra roll is worth.
+ *  4. NERO_DI_SEPPIA — last because by now it has already cost us the reroll decision; the
+ *     sponge only buys back sight for the betting.
+ *
+ * Reads the FILTERED view like every other bot decision, so a die the bot cannot see cannot
+ * inform the choice.
+ */
+function chooseSponge(state: GameState, player: PlayerId): AbilityId | null {
+  const hand = state.hands[player]
+  if (!holdsAbility(hand, 'DADO_SPUGNA')) {
+    return null
+  }
+  const opponent = otherPlayer(player)
+  const oppHand = state.hands[opponent]
+
+  // An ability threatens us if the opponent holds it, or if it sits unstolen among the commons
+  // (where several abilities still hit both seats).
+  const threatens = (ability: AbilityId): boolean =>
+    holdsAbility(oppHand, ability) ||
+    (state.common ?? []).some(
+      (d, i) => d.ability === ability && !state.stolenCommonIndices.includes(i),
+    )
+
+  for (const ability of SPONGE_PRIORITY) {
+    if (threatens(ability)) {
+      return ability
+    }
+  }
+  return null
+}
+
+/** See chooseSponge for why this order, and why it is a ranking rather than a computation. */
+const SPONGE_PRIORITY: readonly AbilityId[] = [
+  'DADO_TORPEDO',
+  'DADO_D_ORO',
+  'MULINELLO',
+  'NERO_DI_SEPPIA',
+]
+
+/** Whether this hand carries `ability`, among its own dice or as its stolen die. */
+function holdsAbility(hand: GameState['hands'][PlayerId], ability: AbilityId): boolean {
   return (
-    (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
-    hand.stolen?.ability === 'DADO_TORPEDO'
+    (hand.own ?? []).some((d) => d.ability === ability) || hand.stolen?.ability === ability
   )
 }
+
 
 // --- MULINELLO_SELECT: spend the extra roll only when it pays ---
 

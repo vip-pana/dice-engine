@@ -63,8 +63,10 @@ segue la sequenza fissa:
    (≥ minimo); l'altro deve vedere o rilanciare (niente check, niente fold).
 3. **Furto** — clicca un dado comune per rubarlo (il primario ruba per primo).
 4. **Scelta rilancio** — seleziona quali dei tuoi 4 dadi rilanciare (tutti tranne
-   il rubato), poi conferma. Quando entrambi hanno scelto **i dadi vengono tirati
-   subito**: da qui in poi la mano è definita.
+   il rubato), poi conferma. Qui si punta anche il **Dado Torpedo** (obbligatorio,
+   se lo hai) e si scelge il bersaglio del **Dado Spugna** (facoltativo). Quando
+   entrambi hanno scelto **i dadi vengono tirati subito**: da qui in poi la mano è
+   definita.
 5. **Mulinello** — solo se uno dei due ha quel dado speciale: avendo visto il
    risultato, decide se tirarlo una terza volta. Se nessuno ce l'ha, questo passo
    **non esiste**.
@@ -112,11 +114,31 @@ mostra nome, icona e regola.
 | 🪙 Dado d'Oro | Il vincitore incassa il doppio | Raddoppia per **chiunque** vinca |
 | ⚡ Dado Torpedo | Un dado scelto dell'avversario perde 1 allo showdown; 10% il campo si elettrizza e un tuo dado **a caso** perde 1 | Colpisce **entrambi** a caso |
 | ⚙ Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
+| ⬡ Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
 Il Torpedo colpisce **dopo** il terzo tiro, quindi il Mulinello non può annullare
 il -1.
+
+#### Cosa può assorbire la Spugna
+
+Scegli il bersaglio durante la **scelta rilancio** (passo 4), assieme ai dadi da
+rilanciare. È facoltativo: puoi non spugnare niente.
+
+Funziona su **Torpedo, Dado d'Oro, Mulinello e Nero di Seppia**. Non funziona su
+**Stella Essiccata e D4**, e non è un limite arbitrario: quelle due decidono la
+loro faccia *nel momento in cui il dado viene lanciato*, e a quel punto le facce
+scartate non esistono più — non c'è niente da annullare. E una Spugna non può
+assorbire un'altra Spugna.
+
+Il Nero di Seppia è un caso a parte: scatta a **inizio mano**, prima che tu possa
+scegliere un bersaglio. Quindi la Spugna non lo previene, lo **annulla a
+posteriori** restituendoti la vista. Da qui una conseguenza legata al ruolo: il
+primario agisce per primo, quindi rivede i suoi dadi **prima** di scegliere il
+rilancio; il non-primario invia le due scelte insieme, quindi recupera la vista
+solo per la seconda scommessa. Il primario ne ricava di più — coerente col
+vantaggio che ha già altrove, ma è bene saperlo.
 
 #### Forza misurata
 
@@ -147,6 +169,19 @@ modella. Per il simulatore sono d6 normali — infatti riportano tutti e tre
 esattamente lo stesso conteggio del controllo. **Il loro valore reale non è
 misurato qui**: va valutato a partita intera (piatto, monete, informazione), non
 su una mano singola.
+
+**Il Dado Spugna non è in tabella affatto, ed è la stessa ragione al quadrato.**
+`playHeuristicHand` tira **una mano isolata**: non c'è avversario, non c'è piatto,
+non c'è cecità, non passa dal reducer. La Spugna non ha nulla da annullare lì,
+quindi misurerebbe esattamente 0,00 — e annulla proprio le abilità che l'harness
+già non sa modellare. Metterla in tabella con un 49,9% significherebbe presentare
+come misura un artefatto del simulatore.
+
+Renderlo misurabile vuol dire un simulatore a **due posti** (contesa sul furto,
+interazione dei rilanci, modello di scommessa) o pilotare il reducer vero dal sim:
+un lavoro separato e grosso. Finché non esiste, il Dado Spugna e i tre con
+l'asterisco **si bilanciano a giudizio, non a numeri** — e questo README lo dice
+invece di far finta di avere i dati.
 
 Le due abilità che il simulatore misura davvero sono quindi il Mulinello e la
 Stella, e stanno entrambe intorno a **+3 punti** sopra il controllo. Il Mulinello

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
   ALL_ABILITY_IDS,
+  isSpongeable,
   chooseAction,
   evaluateHand,
   createRng,
@@ -659,10 +660,18 @@ function Table({
   const aiming = state.phase === 'REROLL_SELECT' && humanIsToAct && humanHoldsTorpedo(state)
   const [torpedoTarget, setTorpedoTarget] = useState<number | null>(null)
 
+  // The Spugna target is chosen in the same window and confirmed by the same button, so it
+  // lives beside the aim rather than inside HumanRow — same reasoning, same lifetime.
+  const [spongeTarget, setSpongeTarget] = useState<AbilityId | null>(null)
+  const selectingReroll = state.phase === 'REROLL_SELECT' && humanIsToAct
+
   // Drop a stale aim when the hand moves on, so last hand's target cannot leak into the next.
   useEffect(() => {
     if (!aiming) setTorpedoTarget(null)
   }, [aiming, state.handNumber])
+  useEffect(() => {
+    if (!selectingReroll) setSpongeTarget(null)
+  }, [selectingReroll, state.handNumber])
 
   return (
     <section
@@ -736,6 +745,8 @@ function Table({
             dispatch={dispatch}
             aiming={aiming}
             torpedoTarget={torpedoTarget}
+            spongeTarget={spongeTarget}
+            onSponge={setSpongeTarget}
           />
         </Band>
       </div>
@@ -968,16 +979,22 @@ function HumanRow({
   dispatch,
   aiming = false,
   torpedoTarget = null,
+  spongeTarget = null,
+  onSponge,
 }: {
   state: GameState
   dispatch: UseGameDispatch
   /** A Torpedo target must be chosen before the reroll can be confirmed. */
   aiming?: boolean
   torpedoTarget?: number | null
+  /** The opponent ability a Dado Spugna will absorb, or null for none. Always optional. */
+  spongeTarget?: AbilityId | null
+  onSponge?: (ability: AbilityId | null) => void
 }): JSX.Element {
   const hand = state.hands.human
   const selecting = state.phase === 'REROLL_SELECT' && state.toAct === 'human'
   const [selected, setSelected] = useState<readonly number[]>([])
+  const spongeChoices = spongeableThreats(state)
 
   // Reset selection whenever we (re)enter selection for a new hand.
   useEffect(() => {
@@ -1057,22 +1074,38 @@ function HumanRow({
               />
             </div>
           )}
+          {spongeChoices.length > 0 && (
+            // Only the abilities actually threatening this hand are offered — an empty list
+            // renders nothing, which is also what happens when the Spugna sits unstolen among
+            // the commons and therefore does nothing. Unlike the Torpedo there is no `disabled`
+            // gate: declining to sponge is a legal move, so the choice stays optional.
+            <div style={{ marginTop: 8 }}>
+              <Hint text="⬡ Dado Spugna: scegli un'abilità del Bot da annullare (facoltativo)." />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                {spongeChoices.map((id) => (
+                  <AbilityCard
+                    key={id}
+                    id={id}
+                    active={spongeTarget === id}
+                    onToggle={() => onSponge?.(spongeTarget === id ? null : id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ marginTop: 6 }}>
             <PrimaryButton
               // The engine ASSERTS that a Torpedo holder picks a target, so block the click
               // rather than let it throw: the UI anticipates the rule, it does not own it.
               disabled={aiming && torpedoTarget === null}
               onClick={() => {
-                dispatch(
-                  aiming && torpedoTarget !== null
-                    ? {
-                        type: 'REROLL',
-                        player: 'human',
-                        ownIndices: selected,
-                        torpedoTarget,
-                      }
-                    : { type: 'REROLL', player: 'human', ownIndices: selected },
-                )
+                dispatch({
+                  type: 'REROLL',
+                  player: 'human',
+                  ownIndices: selected,
+                  ...(aiming && torpedoTarget !== null ? { torpedoTarget } : {}),
+                  ...(spongeTarget !== null ? { spongeTarget } : {}),
+                })
                 setSelected([])
               }}
             >
@@ -1470,11 +1503,47 @@ type UseGameDispatch = ReturnType<typeof useGame>['dispatch']
  * OFFER the aiming UI. The engine asserts the rule regardless of what the UI does.
  */
 function humanHoldsTorpedo(state: GameState): boolean {
+  return humanHolds(state, 'DADO_TORPEDO')
+}
+
+/** Whether the human holds `ability`, among their own dice or as their stolen die. */
+function humanHolds(state: GameState, ability: AbilityId): boolean {
   const hand = state.hands.human
   return (
-    (hand.own ?? []).some((d) => d.ability === 'DADO_TORPEDO') ||
-    hand.stolen?.ability === 'DADO_TORPEDO'
+    (hand.own ?? []).some((d) => d.ability === ability) || hand.stolen?.ability === ability
   )
+}
+
+/**
+ * The spongeable abilities actually threatening the human right now — the only ones worth
+ * offering as Spugna targets.
+ *
+ * Empty when the human holds no Spugna, so the picker disappears rather than presenting a
+ * choice with no effect. That also covers the "unstolen among the commons" case, where the
+ * engine ignores the target anyway.
+ *
+ * An ability threatens us if the Bot holds it OR it sits unstolen among the commons, since
+ * several table effects hit both seats. Presentation only: the reducer decides what a sponge
+ * actually does, and rejects a non-spongeable target regardless of what this offers.
+ */
+function spongeableThreats(state: GameState): readonly AbilityId[] {
+  if (!humanHolds(state, 'DADO_SPUGNA')) {
+    return []
+  }
+  const bot = state.hands.bot
+  return ALL_ABILITY_IDS.filter((id) => {
+    // isSpongeable, not a local list: what a sponge can absorb is a RULE, and the engine owns
+    // it. A copy here would drift the moment an ability's spec changes.
+    if (id === 'DADO_SPUGNA' || !isSpongeable(id)) {
+      return false
+    }
+    const botHolds =
+      (bot.own ?? []).some((d) => d.ability === id) || bot.stolen?.ability === id
+    const onTable = (state.common ?? []).some(
+      (d, i) => d.ability === id && !state.stolenCommonIndices.includes(i),
+    )
+    return botHolds || onTable
+  })
 }
 
 function liveFinalHand(hand: PlayerHandState): Hand | null {
