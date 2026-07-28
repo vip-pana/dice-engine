@@ -1,9 +1,9 @@
-// Deck of dice: the 10 dice a player brings to a match, and the 4 drawn from them each hand.
+// Deck of dice: the 12 dice a player brings to a match, and the 4 drawn from them each hand.
 //
 // Why a deck instead of per-hand random drops: drops (see rollRandomLoadout in strategy.ts)
 // give the player no agency — they get whatever the Rng hands them. A deck is CHOSEN before
 // the match and fixed for its duration, so the player knows exactly which special dice they
-// might see and how often: HAND_SIZE / DECK_SIZE = 40% per special, per hand.
+// might see and how often: HAND_SIZE / DECK_SIZE = 33% per special, per hand.
 //
 // The two systems coexist as explicit per-seat modes (see OwnDiceSource in gameTypes.ts);
 // neither one shadows the other implicitly.
@@ -14,7 +14,7 @@ import type { Rng } from './rng'
 import type { Loadout } from './strategy'
 
 /** How many dice a deck holds. */
-export const DECK_SIZE = 10
+export const DECK_SIZE = 12
 
 /** How many of those dice are drawn to form a hand. */
 export const HAND_SIZE = 4
@@ -24,7 +24,7 @@ export const HAND_SIZE = 4
  * (`null`).
  *
  * A flat array rather than a fixed-length tuple: the length invariant is not the
- * interesting one (the no-duplicate-specials rule is), and a 10-tuple would be unreadable
+ * interesting one (the no-duplicate-specials rule is), and a 12-tuple would be unreadable
  * while letting DECK_SIZE drift out of sync with the type. Element type matches Loadout's,
  * so a drawn hand IS a Loadout and rollOwnDice needs no changes.
  *
@@ -32,7 +32,7 @@ export const HAND_SIZE = 4
  */
 export type Deck = readonly (AbilityId | null)[]
 
-/** A deck of ten plain dice — the base game, with no specials at all. */
+/** A deck of twelve plain dice — the base game, with no specials at all. */
 export const PLAIN_DECK: Deck = Array.from({ length: DECK_SIZE }, () => null)
 
 /**

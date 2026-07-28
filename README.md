@@ -70,12 +70,12 @@ della mano attuale in tempo reale.
 
 ### Mazzo
 
-Prima del match scegli i **10 dadi** del tuo mazzo, che resta fisso per tutta la
+Prima del match scegli i **12 dadi** del tuo mazzo, che resta fisso per tutta la
 partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
 
 - Puoi mettere **al massimo un dado di ogni tipo speciale**; gli slot restanti
   sono d6 normali. Quindi in una mano non trovi mai due speciali identici.
-- Un dado speciale nel mazzo esce in circa **40%** delle mani (4 su 10).
+- Un dado speciale nel mazzo esce in circa **33%** delle mani (4 su 12).
 - Il bot riceve un mazzo generato con lo **stesso numero di dadi speciali** del
   tuo. Nota che un malus (il D4) conta come uno speciale, quindi sceglierlo ti
   costa due volte.

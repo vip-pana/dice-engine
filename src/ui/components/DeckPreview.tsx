@@ -2,8 +2,8 @@ import type { JSX } from 'react'
 import { abilitySpec, type Deck } from '../../engine'
 import { accentForAbility } from './DieView'
 
-/** Slots per row: DECK_SIZE laid out as two tidy rows of five. */
-const DECK_COLUMNS = 5
+/** Slots per row: DECK_SIZE laid out as two tidy rows of six. */
+const DECK_COLUMNS = 6
 
 /** Die box size, per variant. The sidebar has far less room than the builder. */
 const SLOT_SIZE = { full: 52, compact: 32 } as const
@@ -18,10 +18,11 @@ export interface DeckPreviewProps {
 }
 
 /**
- * A deck rendered as its ten dice, so it reads as physical dice rather than a list of names.
+ * A deck rendered as its twelve dice, so it reads as physical dice rather than a list of
+ * names.
  *
- * A fixed 5x2 GRID rather than a wrapping flexbox: wrapping depends on available width, so
- * the tenth slot would orphan itself onto its own row (and the shape would change with the
+ * A fixed 6x2 GRID rather than a wrapping flexbox: wrapping depends on available width, so
+ * the last slot would orphan itself onto its own row (and the shape would change with the
  * window). An explicit column count keeps the deck one recognisable block at any width.
  *
  * A deck die has NO FACE yet — it has not been rolled — so no slot shows pips. Drawing a

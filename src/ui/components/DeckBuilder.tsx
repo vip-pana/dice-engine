@@ -12,13 +12,13 @@ import { AbilityCard } from './AbilityCard'
 import { DeckPreview } from './DeckPreview'
 
 /**
- * Pre-match screen: compose the 10-die deck you will play the whole match with.
+ * Pre-match screen: compose the 12-die deck you will play the whole match with.
  *
  * Each ability is a TOGGLE rather than a counter, so "at most one die of each special" is
  * structurally impossible to violate from here — `validateDeck` is only a backstop.
  *
- * The number that matters to the player is HAND_SIZE/DECK_SIZE: with 4 of 10 dice drawn
- * each hand, any special in the deck shows up in 40% of hands. Without that figure the
+ * The number that matters to the player is HAND_SIZE/DECK_SIZE: with 4 of 12 dice drawn
+ * each hand, any special in the deck shows up in 33% of hands. Without that figure the
  * choice is unreadable, so it is stated prominently rather than left to be inferred.
  */
 export function DeckBuilder({ onConfirm }: { onConfirm: (deck: Deck) => void }): JSX.Element {

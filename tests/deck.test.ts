@@ -207,8 +207,11 @@ describe('drawHandFromDeck', () => {
         if (drawHandFromDeck(rng, deck).includes(id)) seen++
       }
       const rate = seen / trials
-      expect(rate).toBeGreaterThan(0.36)
-      expect(rate).toBeLessThan(0.44)
+      // Bounds derived from HAND_SIZE/DECK_SIZE rather than hardcoded, so they follow the
+      // deck size instead of failing whenever it changes.
+      const expected = HAND_SIZE / DECK_SIZE
+      expect(rate).toBeGreaterThan(expected - 0.04)
+      expect(rate).toBeLessThan(expected + 0.04)
     }
   })
 })

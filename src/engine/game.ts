@@ -70,7 +70,7 @@ export interface NewGameOptions {
    */
   readonly loadouts?: Partial<Record<PlayerId, Loadout>>
   /**
-   * Per-seat 10-die decks. A seat with a deck draws 4 of its 10 dice fresh every hand,
+   * Per-seat 12-die decks. A seat with a deck draws 4 of its 12 dice fresh every hand,
    * ignoring `abilityDrops.ownChance`.
    *
    * Mutually exclusive with `loadouts` for the same seat — supplying both is a caller bug
