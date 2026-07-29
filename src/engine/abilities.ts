@@ -8,14 +8,15 @@
 // when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
 // hand.ts oblivious to the roguelike layer entirely.
 //
-// Five abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// Six abilities need more than a face, so their spec below is a plain-d6 stub and the real
 // effect lives in the reducer, where the state it acts on exists:
-//   - NERO_DI_SEPPIA moves INFORMATION -> applyConcealment in game.ts
+//   - NERO_DI_SEPPIA hides INFORMATION -> applyConcealment in game.ts
 //   - DADO_D_ORO moves COINS           -> goldenPayoutSource in game.ts
 //   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
 //   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
-//   - DADO_SPUGNA cancels ANOTHER ABILITY -> isNullified in game.ts
-// All five are named here so the pattern is discoverable from the registry. A new ability
+//   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in game.ts
+//   - DADO_LANTERNA reveals INFORMATION   -> applyLanternReveal in game.ts
+// All six are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
 
 import type { AbilityId, Die, DieValue } from './types'
@@ -220,6 +221,29 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // seat order, which would make the primary role decide it rather than the players.
     // Value-wise a plain d6. Its power is the absence of someone else's power, applied
     // wherever an effect is read (see isNullified in game.ts).
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
+  DADO_LANTERNA: {
+    id: 'DADO_LANTERNA',
+    name: 'Lanterna',
+    description:
+      "Illumina il mazzo dell'avversario: vedi quali dadi speciali contiene. Si accende da sola nella mano in cui lo peschi, e quello che hai visto resta annotato. Tra i comuni non fa nulla finché non lo rubi.",
+    icon: '🏮',
+    kind: 'buff',
+    // Not ownOnly: the reveal needs an observer, and stealing one supplies exactly that —
+    // seatHolds counts a stolen die. Unclaimed among the commons it lights for nobody, the
+    // same honest outcome as the MULINELLO.
+    //
+    // NOT spongeable, and for a different reason than STELLA_ESSICCATA and D4. Those two have
+    // already committed their face; this one has already delivered its INFORMATION. A Spugna
+    // is aimed during REROLL_SELECT, by which point the player has read the panel — cancelling
+    // it could only blank a list they already know, which is a fiction, not a rule.
+    //
+    // Value-wise a plain d6. Its power is knowledge, applied at deal time by the reducer (see
+    // applyLanternReveal in game.ts) — and it is the only ability that consumes NO Rng, since
+    // nothing about it is chosen.
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,

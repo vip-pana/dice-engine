@@ -81,6 +81,21 @@ export type AbilityId =
    * Chosen during REROLL_SELECT and stored as `spongeTarget` on PlayerHandState.
    */
   | 'DADO_SPUGNA'
+  /**
+   * Reveals which SPECIALS sit in the opponent's 12-die deck.
+   *
+   * The second ability that changes no value at all, only who knows what — see
+   * NERO_DI_SEPPIA above, which is its mirror image. Where that one takes knowledge away
+   * from its victim, this one takes knowledge away from a secret: `decks[opponent]` is the
+   * only genuinely hidden state in the game, since the four dice in play are open
+   * information both ways (see viewFor in view.ts). Accumulated into
+   * `revealedDeckSpecials` on GameState rather than on PlayerHandState, because what has
+   * been seen must outlive the hand that saw it.
+   *
+   * Fires automatically on the deal (see applyLanternReveal in game.ts). No target, no
+   * phase, no action: there is nothing for a player to choose.
+   */
+  | 'DADO_LANTERNA'
 
 /**
  * A rolled die.

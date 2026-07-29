@@ -6,7 +6,7 @@
 // send legal actions; tests assert the guards).
 
 import { evaluateHand, compareHands } from './hand'
-import { abilitySpec, isSpongeable, rerollDie } from './abilities'
+import { ALL_ABILITY_IDS, abilitySpec, isSpongeable, rerollDie } from './abilities'
 import {
   rollOwnDice,
   rollCommonDice,
@@ -18,7 +18,7 @@ import {
   type Loadout,
   type OwnDice,
 } from './strategy'
-import { assertValidDeck, drawHandFromDeck, type Deck } from './deck'
+import { assertValidDeck, deckSpecials, drawHandFromDeck, type Deck } from './deck'
 import type { Rng } from './rng'
 import type { AbilityId, Die, DieValue, Hand } from './types'
 import type { Action } from './actions'
@@ -133,6 +133,8 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
     },
     ownDiceSource,
     decks,
+    // Nobody has lit a lantern yet. Not in emptyHandState: this outlives the hand.
+    revealedDeckSpecials: { human: [], bot: [] },
     pinnedLoadouts: {
       human: ownDiceSource.human.kind === 'pinned',
       bot: ownDiceSource.bot.kind === 'pinned',
@@ -484,6 +486,10 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   // A Nero di Seppia in one seat's dice hides one of the OPPONENT's, so this has to run
   // after both hands exist.
   next = applyConcealment(next, rng)
+  // Its mirror image: a Lanterna reveals what is in the opponent's DECK. Kept adjacent so
+  // the "information effects land on the deal" pattern is findable, and after the setHand
+  // calls above for the same reason — seatHolds cannot see dice that are not there yet.
+  next = applyLanternReveal(next)
 
   // Log the full flow: both players' rolled dice, then the common dice.
   //
@@ -547,6 +553,65 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
     next = withLog(
       next,
       'Nero di Seppia tra i comuni: finché nessuno lo ruba, entrambi hanno un dado nascosto.',
+    )
+  }
+  return next
+}
+
+/**
+ * Lights every Dado Lanterna: each holder learns the SPECIALS in the opponent's deck.
+ *
+ * The mirror of applyConcealment — that one takes knowledge away, this one hands it over. And
+ * unlike every other ability in the game it consumes NO Rng, because nothing about it is
+ * chosen: no target, no victim index, no chance roll. That is why it cannot shift the dice
+ * stream, and there is a test asserting exactly that.
+ *
+ * ACCUMULATES rather than overwrites. The lantern is lit only for the hand it was drawn in,
+ * but a deck is fixed for the whole match, so what a player has already read stays known —
+ * blanking it next hand would not un-know it, it would only look like a bug. `revealedDeckSpecials`
+ * therefore grows and never shrinks, and the UI distinguishes "lit now" from "seen earlier" by
+ * checking whether the seat still holds one.
+ *
+ * Plain slots are not revealed: with at most one die of each ability in a deck, the specials
+ * ARE the information — the other slots are all identical d6.
+ *
+ * A seat whose opponent has no deck (drops or pinned mode) learns nothing. Honest rather than
+ * broken: there is no deck to illuminate.
+ */
+function applyLanternReveal(state: GameState): GameState {
+  let next = state
+  for (const seat of ['human', 'bot'] as const) {
+    // seatHolds, not seatHoldsActive: a Lanterna is not spongeable (its information is already
+    // out by the time a Spugna is aimed), so the sponge-aware variant would be misleading.
+    if (!seatHolds(next, seat, 'DADO_LANTERNA')) {
+      continue
+    }
+    const opponentDeck = next.decks[otherPlayer(seat)]
+    if (opponentDeck === null) {
+      continue
+    }
+
+    const known = new Set(next.revealedDeckSpecials[seat])
+    const found = deckSpecials(opponentDeck)
+    const fresh = found.filter((id) => !known.has(id))
+    if (fresh.length === 0) {
+      // Already knew everything this deck holds. Staying silent matters: a lantern held for
+      // three hands running would otherwise announce the same list three times.
+      continue
+    }
+
+    // Rebuilt in registry order rather than appended, so the array is canonical regardless of
+    // the order reveals happened in — same reasoning as buildDeck in deck.ts.
+    const merged = ALL_ABILITY_IDS.filter((id) => known.has(id) || fresh.includes(id))
+    next = {
+      ...next,
+      revealedDeckSpecials: { ...next.revealedDeckSpecials, [seat]: merged },
+    }
+    next = withLog(
+      next,
+      `Lanterna di ${labelOf(seat)}: nel mazzo di ${labelOf(otherPlayer(seat))} ci sono ${fresh
+        .map((id) => `${abilitySpec(id)?.icon}${abilitySpec(id)?.name}`)
+        .join(', ')}.`,
     )
   }
   return next

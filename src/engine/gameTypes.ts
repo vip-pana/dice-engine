@@ -189,6 +189,26 @@ export interface GameState {
   readonly decks: Readonly<Record<PlayerId, Deck | null>>
 
   /**
+   * Which of the OPPONENT's deck specials each seat has learned, keyed by the OBSERVER.
+   *
+   * `revealedDeckSpecials.human` is what the human knows about `decks.bot`. Filled by a Dado
+   * Lanterna at deal time (see applyLanternReveal in game.ts), in registry order so the array
+   * is canonical however it was accumulated.
+   *
+   * MATCH-LONG, not per-hand, which is why it lives here rather than on PlayerHandState — that
+   * one is wiped by emptyHandState every hand. A deck is fixed for the whole match, so
+   * un-showing what the player has already read would not un-know it; it would just look like
+   * a bug. Note it survives `handleNextHand` BY OMISSION: that function spreads `...state` and
+   * resets an explicit list of fields, and this is deliberately not on it — same as `score`
+   * and `bankroll`. There is a test pinning that, because preservation-by-omission is
+   * invisible at the reset site.
+   *
+   * "Lit right now" is NOT stored: it is `seatHolds(state, seat, 'DADO_LANTERNA')`. A second
+   * field could drift out of sync with this one.
+   */
+  readonly revealedDeckSpecials: Readonly<Record<PlayerId, readonly AbilityId[]>>
+
+  /**
    * Seats whose loadout was supplied explicitly at match creation. Those are never
    * overwritten by random drops — that is how a test or a balance run pins one side to a
    * known loadout while the other side keeps drawing randomly.

@@ -12,6 +12,7 @@ import {
   drawHandFromDeck,
   reducer,
   rollBotDeck,
+  rollRandomBotDeck,
   specialCount,
   validateDeck,
   type AbilityId,
@@ -245,6 +246,46 @@ describe('rollBotDeck', () => {
 
   it('a plain human deck yields a plain bot deck', () => {
     expect(rollBotDeck(createRng(11), PLAIN_DECK)).toEqual(PLAIN_DECK)
+  })
+})
+
+describe('rollRandomBotDeck', () => {
+  const FULL = buildDeck([...ALL_ABILITY_IDS])
+
+  it('always builds a valid deck', () => {
+    for (let seed = 0; seed < 60; seed++) {
+      const bot = rollRandomBotDeck(createRng(seed))
+      expect(validateDeck(bot)).toEqual([])
+      expect(bot).toHaveLength(DECK_SIZE)
+    }
+  })
+
+  it('varies its special COUNT across seeds — the whole point of this mode', () => {
+    // Without this the mode could return a plain deck every time and still look like it works.
+    const counts = new Set<number>()
+    for (let seed = 0; seed < 200; seed++) {
+      counts.add(specialCount(rollRandomBotDeck(createRng(seed))))
+    }
+    expect(counts.size).toBeGreaterThan(1)
+    // And it must stay inside what a deck can hold.
+    for (const n of counts) {
+      expect(n).toBeLessThanOrEqual(MAX_SPECIALS_PER_DECK)
+    }
+  })
+
+  it('ignores the human deck entirely, unlike rollBotDeck', () => {
+    // Same seed, same call: the count owes nothing to what the human brought. Contrast the
+    // mirrored mode, whose count is exactly specialCount(humanDeck).
+    for (let seed = 0; seed < 40; seed++) {
+      expect(rollRandomBotDeck(createRng(seed))).toEqual(rollRandomBotDeck(createRng(seed)))
+    }
+    // At least one seed must disagree with the mirrored count for a FULL human deck, otherwise
+    // the two modes are indistinguishable in practice.
+    const differs = Array.from({ length: 60 }, (_, seed) => seed).some(
+      (seed) =>
+        specialCount(rollRandomBotDeck(createRng(seed))) !== specialCount(FULL),
+    )
+    expect(differs).toBe(true)
   })
 })
 

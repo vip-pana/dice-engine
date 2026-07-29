@@ -12,6 +12,7 @@ import {
   deckSpecials,
   maxBetFor,
   rollBotDeck,
+  rollRandomBotDeck,
   viewFor,
   type AbilityId,
   type Deck,
@@ -36,50 +37,218 @@ import { HandRankingLegend } from './components/HandRankingLegend'
 const botBrainRng = createRng(Math.floor(Math.random() * 2 ** 31))
 
 /**
- * Gates the deck builder in front of the match.
+ * How the bot's 12-die deck comes into being. Chosen before the match.
  *
- * `Match` mounts only once a deck exists, so `useGame`'s eager state initializer always
- * sees a real deck — no `GameState | null` has to be threaded through the whole tree. The
- * `key` forces a fresh mount (and thus a fresh match) whenever the deck changes.
+ * `mirrored` is the historical behaviour and stays the default, so an existing match plays
+ * exactly as it did. The other two exist because of the Dado Lanterna: with the count
+ * mirrored, a player already knows how MANY specials the bot has, so revealing its deck tells
+ * them only half of what it could. `random` hides both the count and the identities;
+ * `custom` lets you set the deck you are about to go looking for, which is the only way to
+ * check that the ability tells the truth.
  */
-export function App(): JSX.Element {
-  const [deck, setDeck] = useState<Deck | null>(null)
+type BotDeckMode = 'mirrored' | 'random' | 'custom'
 
-  if (deck === null) {
-    return <DeckBuilder onConfirm={setDeck} />
-  }
-  return <Match key={deckKey(deck)} deck={deck} onRebuild={() => setDeck(null)} />
-}
-
-/** Stable identity for a deck, used to remount Match when the player rebuilds. */
-function deckKey(deck: Deck): string {
-  return deck.map((id) => id ?? '-').join('|')
+/** What the player has settled on before the match starts. */
+type Setup = {
+  readonly deck: Deck
+  readonly botMode: BotDeckMode
+  /** Only set when botMode is 'custom'. */
+  readonly botDeck: Deck | null
 }
 
 /**
- * Match options for a chosen deck.
+ * Gates deck selection in front of the match: your deck, then how the bot's is made.
+ *
+ * `Match` mounts only once the setup is complete, so `useGame`'s eager state initializer
+ * always sees a real deck — no `GameState | null` has to be threaded through the whole tree.
+ * The `key` forces a fresh mount (and thus a fresh match) whenever anything about the setup
+ * changes.
+ *
+ * Three explicit stages rather than a pair of nullable flags: "deck chosen but bot mode not
+ * yet" and "bot mode chosen but deck not yet" are not both reachable, and modelling them as
+ * independent nullables would invite the impossible combination.
+ */
+export function App(): JSX.Element {
+  const [deck, setDeck] = useState<Deck | null>(null)
+  const [setup, setSetup] = useState<Setup | null>(null)
+
+  const restart = (): void => {
+    setSetup(null)
+    setDeck(null)
+  }
+
+  if (setup !== null) {
+    return <Match key={setupKey(setup)} setup={setup} onRebuild={restart} />
+  }
+  if (deck === null) {
+    return <DeckBuilder onConfirm={setDeck} />
+  }
+  return (
+    <BotDeckChooser
+      onConfirm={(botMode, botDeck) => setSetup({ deck, botMode, botDeck })}
+      onBack={() => setDeck(null)}
+    />
+  )
+}
+
+/**
+ * Stable identity for a setup, used to remount Match when the player changes anything.
+ *
+ * Includes the bot mode and its custom deck, not just the human's deck: switching only the
+ * mode has to restart the match too, and a key built from the human deck alone would silently
+ * keep the old one running.
+ */
+function setupKey(setup: Setup): string {
+  const own = setup.deck.map((id) => id ?? '-').join('|')
+  const bot = setup.botDeck?.map((id) => id ?? '-').join('|') ?? ''
+  return `${own}#${setup.botMode}#${bot}`
+}
+
+/**
+ * Match options for a chosen setup.
  *
  * A factory, not a plain object: the bot's deck is rolled from the MATCH Rng so that one
  * seed reproduces the whole match including both decks. `commonChance` stays live — common
  * dice belong to nobody and are never part of a deck — while `ownChance` is 0 because own
  * dice now come from the deck (deck mode ignores it either way; 0 is honesty, not effect).
  */
-function optionsForDeck(deck: Deck): (rng: Rng) => NewGameOptions {
+function optionsForSetup(setup: Setup): (rng: Rng) => NewGameOptions {
   return (rng) => ({
-    decks: { human: deck, bot: rollBotDeck(rng, deck) },
+    decks: { human: setup.deck, bot: botDeckFor(setup, rng) },
     abilityDrops: { ...DEFAULT_ABILITY_DROPS, ownChance: 0 },
   })
 }
 
+function botDeckFor(setup: Setup, rng: Rng): Deck {
+  switch (setup.botMode) {
+    case 'mirrored':
+      return rollBotDeck(rng, setup.deck)
+    case 'random':
+      return rollRandomBotDeck(rng)
+    case 'custom':
+      // Non-null by construction: 'custom' is only ever set together with a deck.
+      return setup.botDeck ?? rollBotDeck(rng, setup.deck)
+  }
+}
+
+/**
+ * Second setup screen: how the bot's deck is generated.
+ *
+ * Its own screen rather than a control inside the deck builder, because 'custom' has to open
+ * the builder again — nesting one builder inside another would be a worse shape than
+ * sequencing them.
+ */
+function BotDeckChooser({
+  onConfirm,
+  onBack,
+}: {
+  onConfirm: (mode: BotDeckMode, deck: Deck | null) => void
+  onBack: () => void
+}): JSX.Element {
+  const [composing, setComposing] = useState(false)
+
+  if (composing) {
+    return (
+      <DeckBuilder
+        title="Componi il mazzo del Bot"
+        confirmLabel="Gioca contro questo mazzo"
+        // No mention of how the bot's deck is generated: you ARE generating it.
+        note="Non lo vedrai in partita: solo una 🏮 Lanterna può rivelartelo. È così che puoi verificare che l'abilità dica il vero."
+        onConfirm={(deck) => onConfirm('custom', deck)}
+      />
+    )
+  }
+
+  const option = (
+    label: string,
+    description: string,
+    onClick: () => void,
+  ): JSX.Element => (
+    <button
+      type="button"
+      key={label}
+      onClick={onClick}
+      style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        padding: '14px 16px',
+        marginBottom: 10,
+        borderRadius: 10,
+        border: '1px solid #1e293b',
+        background: '#0b1220',
+        color: '#e2e8f0',
+        cursor: 'pointer',
+        font: 'inherit',
+      }}
+    >
+      <strong style={{ fontSize: 15 }}>{label}</strong>
+      <span style={{ display: 'block', color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
+        {description}
+      </span>
+    </button>
+  )
+
+  return (
+    <main
+      style={{
+        fontFamily: 'system-ui, sans-serif',
+        color: '#e2e8f0',
+        maxWidth: 620,
+        margin: '0 auto',
+        padding: '2rem 1.5rem',
+      }}
+    >
+      <h1 style={{ marginTop: 0, marginBottom: 6 }}>Il mazzo del Bot</h1>
+      <p style={{ color: '#94a3b8', fontSize: 14, lineHeight: 1.6, marginTop: 0 }}>
+        Il suo mazzo resta nascosto durante la partita: solo una <strong>🏮 Lanterna</strong>{' '}
+        può rivelarti quali speciali contiene.
+      </p>
+
+      {option(
+        'Specchiato',
+        'Stesso numero di speciali del tuo mazzo, ma scelti a caso. È il comportamento di sempre.',
+        () => onConfirm('mirrored', null),
+      )}
+      {option(
+        'Casuale',
+        'Anche il numero di speciali è casuale: non sai né quanti né quali. Qui la Lanterna vale di più.',
+        () => onConfirm('random', null),
+      )}
+      {option('Lo compongo io', 'Scegli tu i suoi speciali — utile per provare le abilità.', () =>
+        setComposing(true),
+      )}
+
+      <button
+        type="button"
+        onClick={onBack}
+        style={{
+          marginTop: 10,
+          padding: '8px 14px',
+          borderRadius: 8,
+          border: '1px solid #1e293b',
+          background: 'transparent',
+          color: '#94a3b8',
+          cursor: 'pointer',
+          font: 'inherit',
+        }}
+      >
+        ← Cambia il tuo mazzo
+      </button>
+    </main>
+  )
+}
+
 function Match({
-  deck,
+  setup,
   onRebuild,
 }: {
-  deck: Deck
+  setup: Setup
   onRebuild: () => void
 }): JSX.Element {
+  const deck = setup.deck
   // No seed: every match deals differently. Pass one to replay a specific game.
-  const { state: trueState, dispatch, newMatch } = useGame(undefined, optionsForDeck(deck))
+  const { state: trueState, dispatch, newMatch } = useGame(undefined, optionsForSetup(setup))
   const wide = useIsWide()
 
   // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
@@ -149,6 +318,7 @@ function Match({
             onRebuildDeck={onRebuild}
             matchInProgress={state.phase !== 'MATCH_OVER'}
           />
+          <RevealedDeckPanel state={state} />
           <ReferencePanel state={state} grow={wide} />
           {/* Takes the remaining height, so the log reaches the bottom of the page. */}
           <ActionLog log={state.log} grow={wide} />
@@ -270,6 +440,51 @@ function Stat({
  * The rebuild button lives here rather than only in the end-of-match controls: composing a
  * deck is the one setup choice in the game, so the way back to it should always be at hand.
  */
+/**
+ * What a Dado Lanterna has revealed about the BOT's deck, or nothing if it never lit.
+ *
+ * Two states per entry, and the distinction is the whole point of the ability's wording: LIT
+ * means you hold a lantern this hand, DIMMED means you learned it in an earlier hand. The
+ * dimmed list stays because a deck is fixed for the match — hiding what the player already
+ * read would not un-know it, only make the panel look broken.
+ *
+ * AbilityCard rather than DeckPreview: the reveal is about which SPECIALS are in there, and
+ * DeckPreview would draw ten identical plain slots alongside them.
+ */
+function RevealedDeckPanel({ state }: { state: GameState }): JSX.Element | null {
+  const revealed = state.revealedDeckSpecials.human
+  if (revealed.length === 0) {
+    return null
+  }
+  const lit = humanHolds(state, 'DADO_LANTERNA')
+
+  return (
+    <section
+      style={{
+        padding: 14,
+        borderRadius: 12,
+        background: '#0b1220',
+        border: `1px solid ${lit ? ABILITY_ACCENT : '#1e293b'}`,
+        minWidth: 0,
+      }}
+    >
+      <h2 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700 }}>
+        {abilitySpec('DADO_LANTERNA')?.icon} Mazzo del Bot
+      </h2>
+      <p style={{ margin: '0 0 10px', fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
+        {lit
+          ? 'La Lanterna è accesa: questi sono gli speciali nel suo mazzo.'
+          : 'Quello che hai già illuminato. Il suo mazzo non cambia per tutta la partita.'}
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {revealed.map((id) => (
+          <AbilityCard key={id} id={id} active={lit} inactiveNote="già visto" />
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function DeckPanel({
   deck,
   onRebuildDeck,

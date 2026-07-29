@@ -92,9 +92,11 @@ partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
 - Puoi mettere **al massimo un dado di ogni tipo speciale**; gli slot restanti
   sono d6 normali. Quindi in una mano non trovi mai due speciali identici.
 - Un dado speciale nel mazzo esce in circa **33%** delle mani (4 su 12).
-- Il bot riceve un mazzo generato con lo **stesso numero di dadi speciali** del
-  tuo. Nota che un malus (il D4) conta come uno speciale, quindi sceglierlo ti
-  costa due volte.
+- Il bot riceve un mazzo di 12 dadi come il tuo, e **come nasce lo scegli tu** al
+  passo dopo (vedi *Il mazzo del Bot* sotto). Col default «Specchiato» ha lo stesso
+  **numero** di speciali del tuo — quindi un malus come il D4 ti costa due volte,
+  perché prendi la penalità e gli regali un altro speciale che potrebbe essere un
+  buff. Il suo mazzo non è mai visibile: solo una 🏮 Lanterna te lo rivela.
 - I **dadi comuni** non fanno parte di nessun mazzo: continuano a poter uscire
   speciali col loro tasso.
 - A fine match: *Nuova partita* tiene il mazzo (e ripesca quello del bot),
@@ -115,6 +117,7 @@ mostra nome, icona e regola.
 | ⚡ Dado Torpedo | Un dado scelto dell'avversario perde 1 allo showdown; 10% il campo si elettrizza e un tuo dado **a caso** perde 1 | Colpisce **entrambi** a caso |
 | 🎣 Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
 | 🧽 Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
+| 🏮 Lanterna | Rivela quali **speciali** ci sono nel mazzo del Bot | **Non fa nulla** finché non lo rubi |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
@@ -127,10 +130,12 @@ Scegli il bersaglio durante la **scelta rilancio** (passo 4), assieme ai dadi da
 rilanciare. È facoltativo: puoi non spugnare niente.
 
 Funziona su **Torpedo, Dado d'Oro, Mulinello e Nero di Seppia**. Non funziona su
-**Stella Essiccata e D4**, e non è un limite arbitrario: quelle due decidono la
-loro faccia *nel momento in cui il dado viene lanciato*, e a quel punto le facce
-scartate non esistono più — non c'è niente da annullare. E una Spugna non può
-assorbire un'altra Spugna.
+**Stella Essiccata e D4**: quelle due decidono la loro faccia *nel momento in cui
+il dado viene lanciato*, e a quel punto le facce scartate non esistono più — non
+c'è niente da annullare. Non funziona nemmeno sulla **🏮 Lanterna**, ma per un
+motivo diverso: quella ha già *consegnato l'informazione*, e la Spugna si punta al
+rilancio, quando l'hai già letta. Cancellarla svuoterebbe un elenco che conosci
+già. E una Spugna non può assorbire un'altra Spugna.
 
 Il Nero di Seppia è un caso a parte: scatta a **inizio mano**, prima che tu possa
 scegliere un bersaglio. Quindi la Spugna non lo previene, lo **annulla a
@@ -139,6 +144,33 @@ primario agisce per primo, quindi rivede i suoi dadi **prima** di scegliere il
 rilancio; il non-primario invia le due scelte insieme, quindi recupera la vista
 solo per la seconda scommessa. Il primario ne ricava di più — coerente col
 vantaggio che ha già altrove, ma è bene saperlo.
+
+#### Cosa illumina la Lanterna
+
+Il mazzo del Bot **esiste ed è nascosto**: da nessuna parte, in partita, puoi
+vedere quali 12 dadi ha. La Lanterna è l'unica cosa che te lo dice.
+
+- Rivela solo gli **speciali**: i dadi normali non portano informazione.
+- Si accende **da sola** nella mano in cui la peschi — non c'è niente da cliccare.
+- È accesa solo in quella mano, ma ciò che hai illuminato **resta elencato**
+  (spento) per tutto il match: il mazzo non cambia mai, quindi ri-nasconderlo non
+  ti farebbe dimenticare quello che hai letto.
+- Una Lanterna **rubata** dai comuni arriva dopo la distribuzione, quindi illumina
+  dalla mano successiva.
+
+È anche l'unica abilità che **non consuma casualità**: non tira e non scegle
+niente, quindi non può spostare la sequenza dei dadi.
+
+#### Il mazzo del Bot: tre modalità
+
+Dopo aver composto il tuo mazzo scegli come nasce quello del Bot. In tutti i casi
+**resta nascosto** in partita.
+
+| Modalità | Cosa fa |
+| --- | --- |
+| **Specchiato** (default) | Stesso **numero** di speciali del tuo, ma scelti a caso. Nota che pareggia solo il conteggio: *quali* abilità ha è sempre stato casuale. |
+| **Casuale** | Anche il numero è casuale: non sai né quanti né quali. È qui che la Lanterna vale di più. |
+| **Lo compongo io** | Scegli tu i suoi speciali. Serve a **provare le abilità**: conosci la verità e verifichi che la Lanterna la dica. |
 
 #### Forza misurata
 
@@ -170,12 +202,13 @@ esattamente lo stesso conteggio del controllo. **Il loro valore reale non è
 misurato qui**: va valutato a partita intera (piatto, monete, informazione), non
 su una mano singola.
 
-**Il Dado Spugna non è in tabella affatto, ed è la stessa ragione al quadrato.**
-`playHeuristicHand` tira **una mano isolata**: non c'è avversario, non c'è piatto,
-non c'è cecità, non passa dal reducer. La Spugna non ha nulla da annullare lì,
-quindi misurerebbe esattamente 0,00 — e annulla proprio le abilità che l'harness
-già non sa modellare. Metterla in tabella con un 49,9% significherebbe presentare
-come misura un artefatto del simulatore.
+**Dado Spugna e Lanterna non sono in tabella affatto, ed è la stessa ragione al
+quadrato.** `playHeuristicHand` tira **una mano isolata**: non c'è avversario, non
+c'è piatto, non c'è cecità, non c'è mazzo, non passa dal reducer. La Spugna non ha
+nulla da annullare lì, e la Lanterna nessun mazzo da illuminare: misurerebbero
+esattamente 0,00. Peggio, la Spugna annulla proprio le abilità che l'harness già
+non sa modellare. Metterle in tabella con un 49,9% significherebbe presentare come
+misura un artefatto del simulatore.
 
 Renderlo misurabile vuol dire un simulatore a **due posti** (contesa sul furto,
 interazione dei rilanci, modello di scommessa) o pilotare il reducer vero dal sim:

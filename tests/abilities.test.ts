@@ -3,6 +3,7 @@ import {
   ABILITIES,
   ALL_ABILITY_IDS,
   abilitySpec,
+  buildDeck,
   chooseTorpedoTarget,
   createInitialState,
   createRng,
@@ -643,6 +644,14 @@ describe('random ability drops', () => {
     expect(rateOf(first)).toBeGreaterThan(0.33)
     expect(rateOf(last)).toBeLessThan(rateOf(first))
     // Nobody is starved outright — the effect is a bias, not an exclusion.
+    //
+    // HEADS UP if you are adding the 9th ability: this floor is close. Measured rate of the
+    // LAST registry entry, 400k trials against an independent model of drawAbilitySlots:
+    //   7 abilities -> 0.309
+    //   8 abilities -> 0.280   (where we are now)
+    //   9 abilities -> 0.246   <- below this floor, this test FAILS
+    // The fix then is not a looser floor: it is more slots, a lower ownChance, or accepting
+    // that a 9-ability pool cannot deliver ownChance to everyone and saying so here.
     expect(rateOf(last)).toBeGreaterThan(0.25)
   })
 
@@ -1918,6 +1927,130 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     const s = playToSteal(createInitialState({ loadouts: { human: SPUGNA_ONLY } }), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.DADO_SPUGNA.icon)
+  })
+})
+
+describe('DADO_LANTERNA: reveals the specials in the opponent deck', () => {
+  const LANTERNA_ONLY: Loadout = ['DADO_LANTERNA', null, null, null]
+  const BOT_SPECIALS: readonly AbilityId[] = ['DADO_TORPEDO', 'DADO_D_ORO', 'NERO_DI_SEPPIA']
+  const botDeck = buildDeck([...BOT_SPECIALS])
+
+  /** A match where the human is pinned to a loadout and the bot plays a known deck. */
+  function withBotDeck(loadout: Loadout): ReturnType<typeof createInitialState> {
+    return createInitialState({ loadouts: { human: loadout }, decks: { bot: botDeck } })
+  }
+
+  it('reveals exactly the specials in the deck, in registry order', () => {
+    const rng = createRng(701)
+    const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    // Registry order, not the order they were listed in BOT_SPECIALS above.
+    expect(s.revealedDeckSpecials.human).toEqual(
+      ALL_ABILITY_IDS.filter((id) => BOT_SPECIALS.includes(id)),
+    )
+    // Only the specials: the plain slots are not listed.
+    expect(s.revealedDeckSpecials.human).toHaveLength(BOT_SPECIALS.length)
+  })
+
+  it('reveals nothing without one', () => {
+    const rng = createRng(702)
+    const s = playToSteal(withBotDeck(['STELLA_ESSICCATA', null, null, null]), rng)
+    expect(s.revealedDeckSpecials.human).toEqual([])
+    expect(s.revealedDeckSpecials.bot).toEqual([])
+  })
+
+  it('keeps what it revealed after the hand ends — the deck never changes', () => {
+    // Pins preservation-by-omission in handleNextHand: this field is deliberately absent from
+    // that function's reset list, which is invisible at the reset site.
+    const rng = createRng(703)
+    let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    const revealed = s.revealedDeckSpecials.human
+    expect(revealed.length).toBeGreaterThan(0)
+
+    s = playHandToCompletion(s, rng)
+    expect(s.revealedDeckSpecials.human).toEqual(revealed)
+    if (s.phase !== 'MATCH_OVER') {
+      s = reducer(s, { type: 'NEXT_HAND' }, rng)
+      expect(s.revealedDeckSpecials.human).toEqual(revealed)
+    }
+  })
+
+  it('does not duplicate entries or re-announce across hands', () => {
+    const rng = createRng(704)
+    let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    const lines = () => s.log.filter((l) => /^Lanterna di/.test(l)).length
+    expect(lines()).toBe(1)
+
+    s = playHandToCompletion(s, rng)
+    if (s.phase !== 'MATCH_OVER') {
+      s = reducer(s, { type: 'NEXT_HAND' }, rng)
+      s = playToSteal(s, rng)
+      // Pinned loadout, so the human still holds it — and there is nothing new to say.
+      expect(new Set(s.revealedDeckSpecials.human).size).toBe(
+        s.revealedDeckSpecials.human.length,
+      )
+      expect(lines()).toBe(1)
+    }
+  })
+
+  it('reveals nothing when the opponent has no deck', () => {
+    // A drops- or pinned-mode opponent has no deck to illuminate. Honest, not a crash.
+    const rng = createRng(705)
+    const s = playToSteal(createInitialState({ loadouts: { human: LANTERNA_ONLY } }), rng)
+    expect(s.revealedDeckSpecials.human).toEqual([])
+  })
+
+  it('consumes no Rng at all — the property that makes it safe to add', () => {
+    // Every other ability either rolls or picks. This one does neither, so adding it cannot
+    // shift the dice stream. Same seed, lantern vs no lantern: identical dice.
+    const dice = (loadout: Loadout): readonly number[] => {
+      const rng = createRng(706)
+      const s = playToSteal(withBotDeck(loadout), rng)
+      return [
+        ...s.hands.human.own!.map((d) => d.value),
+        ...s.hands.bot.own!.map((d) => d.value),
+        ...s.common!.map((d) => d.value),
+      ]
+    }
+    expect(dice(LANTERNA_ONLY)).toEqual(dice(['DADO_LANTERNA', null, null, null]))
+    // And against a seat holding a plain loadout, only the human's OWN first die differs
+    // (it carries the ability); the bot's dice and the commons must match exactly.
+    const withLantern = dice(LANTERNA_ONLY)
+    const withoutLantern = dice([null, null, null, null])
+    expect(withLantern.slice(4)).toEqual(withoutLantern.slice(4))
+  })
+
+  it('cannot be absorbed by a Dado Spugna', () => {
+    // Different reason from Stella/D4: those committed a face, this already handed over the
+    // information. Either way the reducer refuses rather than no-opping.
+    expect(ABILITIES.DADO_LANTERNA.spongeable).not.toBe(true)
+
+    const rng = createRng(707)
+    let s = playToSteal(
+      createInitialState({
+        loadouts: { human: ['DADO_SPUGNA', null, null, null], bot: LANTERNA_ONLY },
+      }),
+      rng,
+    )
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    expect(() =>
+      reducer(
+        s,
+        { type: 'REROLL', player: s.primary, ownIndices: [], spongeTarget: 'DADO_LANTERNA' },
+        rng,
+      ),
+    ).toThrow(/cannot be absorbed/)
+  })
+
+  it('is not ownOnly, so it can drop among the commons and be stolen', () => {
+    expect(ABILITIES.DADO_LANTERNA.ownOnly).not.toBe(true)
+  })
+
+  it('shows its icon in the action log like any other special', () => {
+    const rng = createRng(708)
+    const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
+    expect(rollLine).toContain(ABILITIES.DADO_LANTERNA.icon)
   })
 })
 
