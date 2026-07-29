@@ -162,8 +162,33 @@ export function drawHandFromDeck(rng: Rng, deck: Deck): Loadout {
 export function rollBotDeck(rng: Rng, humanDeck: Deck): Deck {
   // Clamp rather than throw: the builder UI prevents this, but the engine should not be
   // brittle if a caller asks for more specials than the registry can supply.
-  const wanted = Math.min(specialCount(humanDeck), ALL_ABILITY_IDS.length)
+  return deckOfRandomSpecials(rng, Math.min(specialCount(humanDeck), ALL_ABILITY_IDS.length))
+}
 
+/**
+ * Generates a bot deck whose special COUNT is random too, ignoring the human's deck entirely.
+ *
+ * The alternative to rollBotDeck, and the reason it exists: with the count mirrored, a player
+ * already knows how many specials the bot has, so an ability that reveals the bot's deck (the
+ * Dado Lanterna) can only tell them half of what it otherwise would. Here they know neither
+ * how many nor which.
+ *
+ * Rng discipline: consumes ONE draw for the count, then `wanted` for the shuffle — so a seed
+ * does NOT produce the same deck as rollBotDeck. Expected, and the same caveat that already
+ * applies between the `drops` and `deck` own-dice modes: they are different games.
+ */
+export function rollRandomBotDeck(rng: Rng): Deck {
+  return deckOfRandomSpecials(rng, rng.nextInt(0, ALL_ABILITY_IDS.length))
+}
+
+/**
+ * A deck holding `wanted` specials drawn uniformly from the registry.
+ *
+ * Partial Fisher-Yates over a copy of the registry: fixed draw count for a given `wanted`, so
+ * a seed reproduces the deck exactly. Shared by both bot-deck modes so the two cannot drift
+ * apart in how they pick.
+ */
+function deckOfRandomSpecials(rng: Rng, wanted: number): Deck {
   const candidates = [...ALL_ABILITY_IDS]
   for (let i = 0; i < wanted; i++) {
     const j = rng.nextInt(i, candidates.length - 1)
@@ -171,6 +196,5 @@ export function rollBotDeck(rng: Rng, humanDeck: Deck): Deck {
     candidates[i] = candidates[j]!
     candidates[j] = swap
   }
-
   return buildDeck(candidates.slice(0, wanted))
 }
