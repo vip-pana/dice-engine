@@ -55,6 +55,7 @@ function emptyHandState(): PlayerHandState {
     concealedIndices: [],
     torpedoTarget: null,
     mulinelloUsed: false,
+    paguroChosen: false,
     spongeTarget: null,
     lanternaUsed: false,
   }
@@ -288,6 +289,8 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
       return handleMulinello(state, action.player, true, rng)
     case 'MULINELLO_PASS':
       return handleMulinello(state, action.player, false, rng)
+    case 'PAGURO_CHOOSE':
+      return handlePaguroChoose(state, action.player, action.index, rng)
     case 'LANTERNA_PEEK':
       return handleLanternPeek(state, action.player)
     case 'NEXT_HAND':
@@ -361,6 +364,7 @@ export function inPeekablePhase(state: GameState): boolean {
     state.phase === 'STEAL' ||
     state.phase === 'REROLL_SELECT' ||
     state.phase === 'MULINELLO_SELECT' ||
+    state.phase === 'PAGURO_SELECT' ||
     state.phase === 'SECOND_BET'
   )
 }
@@ -805,12 +809,25 @@ function restoreSightIfSponged(
 
 /** Formats a seat's own dice for the log, masking the ones that seat cannot see. */
 function handStr(state: GameState, seat: PlayerId): string {
-  const own = state.hands[seat].own
+  const hand = state.hands[seat]
+  const own = hand.own
   if (own === null) {
     return '—'
   }
-  const concealed = new Set(state.hands[seat].concealedIndices)
-  return own.map((die, i) => (concealed.has(i) ? '?' : dieStr(die))).join(', ')
+  const concealed = new Set(hand.concealedIndices)
+  return own
+    .map((die, i) => {
+      if (concealed.has(i)) {
+        return '?'
+      }
+      // A Paguro not yet picked is covered: printing its value/split would spoil the blind
+      // choice in the log (this runs at "Dopo il rilancio", before PAGURO_SELECT).
+      if (die.ability === 'DADO_PAGURO' && !hand.paguroChosen) {
+        return `${abilitySpec(die.ability)?.icon}?`
+      }
+      return dieStr(die)
+    })
+    .join(', ')
 }
 
 /**
@@ -1046,7 +1063,8 @@ function applyRerollSelections(state: GameState, rng: Rng): GameState {
 function afterRerollResolved(state: GameState, rng: Rng): GameState {
   const first = firstMulinelloSeat(state)
   if (first === null) {
-    return enterSecondBet(state, rng)
+    // No Mulinello — the Paguro's blind pick, if any, is the next decision after the reroll.
+    return enterPaguroSelectOrSecondBet(state, rng)
   }
   return withLog(
     { ...state, phase: 'MULINELLO_SELECT', toAct: first },
@@ -1102,6 +1120,132 @@ function handleMulinello(
 
   // Both seats can hold one, so hand off before leaving the phase.
   const remaining = firstMulinelloSeat(next)
+  if (remaining !== null) {
+    return { ...next, toAct: remaining }
+  }
+  // Mulinelli done — the Paguro's blind pick, if any, comes next.
+  return enterPaguroSelectOrSecondBet(next, rng)
+}
+
+// --- PAGURO_SELECT: the blind pick among a Dado Paguro's three covered faces ---
+
+/**
+ * Routes out of the reroll/Mulinello step into PAGURO_SELECT, or straight to the second bet.
+ *
+ * Entered ONLY when a seat can act in it, exactly like MULINELLO_SELECT: a hand with no Paguro
+ * follows the path it always did, so no existing caller pays for a phase it has no decision in.
+ */
+function enterPaguroSelectOrSecondBet(state: GameState, rng: Rng): GameState {
+  const first = firstPaguroSeat(state)
+  if (first === null) {
+    return enterSecondBet(state, rng)
+  }
+  return withLog(
+    { ...state, phase: 'PAGURO_SELECT', toAct: first },
+    `${labelOf(first)} ha un Dado Paguro: sceglie al buio uno dei tre dadi coperti.`,
+  )
+}
+
+/**
+ * The next seat owed a Paguro pick, primary first, or null if nobody is.
+ *
+ * A queue like firstMulinelloSeat rather than a flag: both seats can hold a Paguro at once (one
+ * each among their own dice), so the phase hands off from one to the other before it ends.
+ */
+function firstPaguroSeat(state: GameState): PlayerId | null {
+  const order: readonly PlayerId[] = [state.primary, otherPlayer(state.primary)]
+  return order.find((seat) => canChoosePaguro(state, seat)) ?? null
+}
+
+/**
+ * The three faces a Dado Paguro offers to pick from, folding in any fog.
+ *
+ * Clear: exactly the three rolled faces. FOGGED: an opponent's Brumeggio makes the Paguro roll
+ * its ability twice, so rollDieWithAbility leaves six faces as [firstThree, secondThree] (see
+ * its fog path), and each shell is the LOWER of its pair — the same "roll twice, keep the worse"
+ * the fog applies to every other ability, here one shell at a time. Either way the player still
+ * picks ONE of THREE covered shells, which is what keeps the UI and the bot (both index 0..2)
+ * uniform whether or not the fog is on.
+ *
+ * Knows the fog's 3+3 layout, like the Stella fog test does; that coupling is the price of
+ * composing a blind player choice with a roll-time modifier, and it lives here with the rest of
+ * the Paguro's effect rather than leaking into abilities.ts.
+ */
+function paguroShells(rolls: readonly DieValue[]): readonly DieValue[] {
+  if (rolls.length === 6) {
+    return [
+      Math.min(rolls[0]!, rolls[3]!) as DieValue,
+      Math.min(rolls[1]!, rolls[4]!) as DieValue,
+      Math.min(rolls[2]!, rolls[5]!) as DieValue,
+    ]
+  }
+  return rolls
+}
+
+/** Whether `seat` still owes a Dado Paguro's blind pick this hand. */
+function canChoosePaguro(state: GameState, seat: PlayerId): boolean {
+  const own = state.hands[seat].own
+  if (own === null || state.hands[seat].paguroChosen) {
+    return false
+  }
+  // ownOnly, so the Paguro can only sit among the four own dice — no stolen die to consider.
+  return own.some((die) => die.ability === 'DADO_PAGURO')
+}
+
+/**
+ * Resolves a Dado Paguro's blind pick: writes the chosen one of its three rolled faces into the
+ * die and reveals it.
+ *
+ * `index` is 0..2 into the die's `rolls`. Consumes no Rng — the three faces were already thrown
+ * with the rest of the own dice; this only selects which survives. The pick is blind by
+ * construction (the client never saw the faces, see viewFor), so the index is a client choice
+ * that the reducer merely records; `rng` is threaded only to reach enterSecondBet's deal path.
+ */
+function handlePaguroChoose(
+  state: GameState,
+  player: PlayerId,
+  index: number,
+  rng: Rng,
+): GameState {
+  assert(state.phase === 'PAGURO_SELECT', 'PAGURO_CHOOSE only allowed in PAGURO_SELECT')
+  assert(state.toAct === player, 'not this player to choose a Dado Paguro face')
+  assert(canChoosePaguro(state, player), 'this seat has no pending Dado Paguro')
+
+  const hand = state.hands[player]
+  assert(hand.own !== null, 'Paguro chosen before the dice were rolled')
+  const pIdx = hand.own.findIndex((die) => die.ability === 'DADO_PAGURO')
+  assert(pIdx !== -1, 'Paguro holder has no Paguro die')
+
+  const die = hand.own[pIdx]!
+  // 3 faces when clear, 6 when fogged (rolled twice). paguroShells folds the fog back to three.
+  assert(
+    die.rolls !== undefined && (die.rolls.length === 3 || die.rolls.length === 6),
+    'a Dado Paguro must have its rolled faces to choose from',
+  )
+  assert(
+    Number.isInteger(index) && index >= 0 && index < 3,
+    'Paguro choice must be a covered-shell index 0..2',
+  )
+
+  const shells = paguroShells(die.rolls)
+  const kept = shells[index]!
+  const own = [...hand.own]
+  // Reveal the die as its three shells with the kept one — so a fogged Paguro shows the three
+  // faces it was actually choosing between, not the six raw rolls behind them.
+  own[pIdx] = { ...die, value: kept, rolls: shells }
+  let next = setHand(state, player, {
+    own: [own[0]!, own[1]!, own[2]!, own[3]!],
+    paguroChosen: true,
+  })
+  // The kept value is announced now — AFTER the pick — so the log never spoils the blind
+  // choice. The index is 1-based for the player, matching the reroll-target log style.
+  next = withLog(
+    next,
+    `Dado Paguro di ${labelOf(player)}: pesca il dado ${index + 1} e tiene ${kept}.`,
+  )
+
+  // Both seats can owe a pick, so hand off before leaving the phase.
+  const remaining = firstPaguroSeat(next)
   if (remaining !== null) {
     return { ...next, toAct: remaining }
   }

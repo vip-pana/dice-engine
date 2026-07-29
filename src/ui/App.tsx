@@ -1279,6 +1279,14 @@ function HumanRow({
       ? hand.own.findIndex((d) => d.ability === 'MULINELLO')
       : -1
 
+  // Same idea for the Paguro: mark WHICH covered die the shell buttons below decide, so the
+  // player connects the choice to a die on the table. Highlight only — the pick is a button,
+  // and the die itself stays covered until it lands.
+  const paguroIndex =
+    state.phase === 'PAGURO_SELECT' && state.toAct === 'human'
+      ? hand.own.findIndex((d) => d.ability === 'DADO_PAGURO')
+      : -1
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -1290,11 +1298,15 @@ function HumanRow({
             rolls={die.rolls}
             // A concealed die stays selectable: rerolling blind is allowed by design.
             concealed={die.concealed}
-            selected={(selecting && selected.includes(i)) || i === mulinelloIndex}
+            selected={
+              (selecting && selected.includes(i)) || i === mulinelloIndex || i === paguroIndex
+            }
             caption={
               i === mulinelloIndex
                 ? `ritirabile ${abilitySpec('MULINELLO')?.icon}`
-                : undefined
+                : i === paguroIndex
+                  ? `scegli al buio ${abilitySpec('DADO_PAGURO')?.icon}`
+                  : undefined
             }
             onClick={selecting ? () => toggle(i) : undefined}
           />
@@ -1489,6 +1501,30 @@ function Controls({
         <SecondaryButton onClick={() => dispatch({ type: 'MULINELLO_PASS', player: 'human' })}>
           Tieni così
         </SecondaryButton>
+      </div>
+    )
+  }
+
+  // PAGURO_SELECT: three covered "shells" to pick from, blind. Like the Mulinello this is not
+  // driven on the dice in hand (the Paguro's three faces are not among them) — it is a choice
+  // among three hidden faces, so three identical covered buttons carry it. The faces stay
+  // secret until the pick lands: nothing here reads their values.
+  if (state.phase === 'PAGURO_SELECT') {
+    return (
+      <div>
+        <Hint
+          text={`${abilitySpec('DADO_PAGURO')?.icon} Dado Paguro: scegli una delle tre conchiglie… al buio!`}
+        />
+        <div style={rowStyle}>
+          {[0, 1, 2].map((index) => (
+            <PrimaryButton
+              key={index}
+              onClick={() => dispatch({ type: 'PAGURO_CHOOSE', player: 'human', index })}
+            >
+              Conchiglia {index + 1} {abilitySpec('DADO_PAGURO')?.icon}
+            </PrimaryButton>
+          ))}
+        </div>
       </div>
     )
   }
@@ -1826,6 +1862,8 @@ function phaseLabel(phase: GameState['phase']): string {
       return 'Scelta rilancio'
     case 'MULINELLO_SELECT':
       return 'Mulinello'
+    case 'PAGURO_SELECT':
+      return 'Paguro'
     case 'SECOND_BET':
       return 'Seconda scommessa'
     case 'SHOWDOWN':

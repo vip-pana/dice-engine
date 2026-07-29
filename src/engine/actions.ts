@@ -92,6 +92,24 @@ export type MulinelloAction =
   | { readonly type: 'MULINELLO_PASS'; readonly player: PlayerId }
 
 /**
+ * Pick which of a Dado Paguro's three covered faces to keep, valid in PAGURO_SELECT.
+ *
+ * `index` is 0..2 into the die's `rolls`. The pick is BLIND — the client sends an index without
+ * ever being shown the faces (the die is masked in every view until the choice lands), so the
+ * chosen face is a uniform draw whatever the index. One-shot per hand, tracked as `paguroChosen`.
+ *
+ * A single action carrying an index rather than a per-face choice: there is exactly one Paguro
+ * per seat (it is ownOnly, so at most one own die can carry it), so "which face" is the whole
+ * decision. Like MulinelloAction it could NOT ride along on the REROLL action: it has to be
+ * answered after the reroll has resolved, once the dice are fixed.
+ */
+export interface PaguroChooseAction {
+  readonly type: 'PAGURO_CHOOSE'
+  readonly player: PlayerId
+  readonly index: number
+}
+
+/**
  * Take a Dado Lanterna's one look at the opponent's deck. Valid from STEAL to SECOND_BET.
  *
  * THE ONLY ACTION IN THIS REDUCER THAT IS NOT A MOVE. It does not read `toAct`, does not write
@@ -122,6 +140,7 @@ export type Action =
   | StealAction
   | RerollAction
   | MulinelloAction
+  | PaguroChooseAction
   | LanternPeekAction
   | NextHandAction
   | RollOffAction

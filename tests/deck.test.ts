@@ -338,6 +338,11 @@ describe('deck mode in a match', () => {
     while (s.phase === 'MULINELLO_SELECT') {
       s = reducer(s, { type: 'MULINELLO_PASS', player: s.toAct }, rng)
     }
+    // A full deck can likewise hand a seat a Dado Paguro, which opens a blind-pick phase.
+    // Make the pick (index 0) so the hand can finish; the face is neutral either way.
+    while (s.phase === 'PAGURO_SELECT') {
+      s = reducer(s, { type: 'PAGURO_CHOOSE', player: s.toAct, index: 0 }, rng)
+    }
     if (s.phase === 'SECOND_BET') {
       s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
       s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)

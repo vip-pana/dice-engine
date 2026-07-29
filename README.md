@@ -70,6 +70,9 @@ segue la sequenza fissa:
 5. **Mulinello** — solo se uno dei due ha quel dado speciale: avendo visto il
    risultato, decide se tirarlo una terza volta. Se nessuno ce l'ha, questo passo
    **non esiste**.
+5b. **Paguro** — solo se uno dei due ha un 🦀 Dado Paguro: quel dado si è diviso in
+   tre facce coperte e il suo proprietario ne sceglie una **al buio**, senza vederne
+   i valori. Come il Mulinello, se nessuno ce l'ha questo passo **non esiste**.
 6. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
    rilancia o **lascia la mano** (il fold è possibile solo qui, e solo se stai
    affrontando una puntata: chi lascia cede piatto e punto). Nota che a questo
@@ -120,6 +123,7 @@ mostra nome, icona e regola.
 | 🧽 Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
 | 🏮 Dado Lanterna | Una **sbirciata** al mazzo intero del Bot, quando vuoi. Una volta per mano | **Non fa nulla** finché non lo rubi |
 | 🌫️ Dado Brumeggio | Ogni dado dell'avversario esce **due volte** e tiene il **più basso**, per tutta la mano: è un **malus** che infliggi | **Non fa nulla** finché non lo rubi |
+| 🦀 Dado Paguro | Tira 3 dadi coperti e **scegli tu** quale tenere, **al buio**: è il gemello interattivo della Stella, ma senza vederne i valori resta un d6 neutro (**malus**, rinunci al "tieni il più alto") | Mai tra i comuni: solo sui tuoi dadi |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
@@ -149,7 +153,9 @@ rilanciare. È facoltativo: puoi non spugnare niente.
 Funziona su **Torpedo, Dado d'Oro, Mulinello, Nero di Seppia e Brumeggio**. Non funziona su
 **Stella Essiccata e D4**: quelle due decidono la loro faccia *nel momento in cui
 il dado viene lanciato*, e a quel punto le facce scartate non esistono più — non
-c'è niente da annullare. Non funziona nemmeno sulla **🏮 Lanterna**, ma per un
+c'è niente da annullare. Non funziona nemmeno sul **🦀 Dado Paguro**: la sua faccia
+è tutta nella scelta del proprietario, e una Spugna dovrebbe "des-cegliere", che non
+è una cosa. Non funziona nemmeno sulla **🏮 Lanterna**, ma per un
 motivo diverso: la sbirciata la fai **quando vuoi tu**, quindi annullarla si
 deciderebbe in base a *se avevi già cliccato o no*. Una sbirciata presa al furto è
 già spesa e intoccabile, una tenuta per la seconda scommessa no — e il rilancio è

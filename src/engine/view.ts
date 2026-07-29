@@ -14,7 +14,7 @@
 // a filtered state from a real one, which is exactly the point.
 
 import type { Die } from './types'
-import type { GameState, PlayerId, PlayerHandState } from './gameTypes'
+import { otherPlayer, type GameState, type PlayerId, type PlayerHandState } from './gameTypes'
 import type { OwnDice } from './strategy'
 
 /**
@@ -40,29 +40,67 @@ function maskDie(die: Die): Die {
   }
 }
 
-/** Masks the dice of `hand` that its owner may not see. */
-function maskHand(hand: PlayerHandState): PlayerHandState {
-  if (hand.own === null || hand.concealedIndices.length === 0) {
+/** True for an own die that is a Dado Paguro whose blind pick has not been made yet. */
+function isPendingPaguro(hand: PlayerHandState, die: Die): boolean {
+  return die.ability === 'DADO_PAGURO' && !hand.paguroChosen
+}
+
+/**
+ * Masks the dice `hand`'s OWNER may not see: those hidden by an opponent's Nero di Seppia AND
+ * any Dado Paguro still awaiting its blind pick. Returns the hand unchanged when nothing hides.
+ */
+function maskOwnHand(hand: PlayerHandState): PlayerHandState {
+  if (hand.own === null) {
     return hand
   }
   const hidden = new Set(hand.concealedIndices)
-  const own = hand.own.map((die, i) => (hidden.has(i) ? maskDie(die) : die)) as unknown as OwnDice
+  if (hidden.size === 0 && !hand.own.some((die) => isPendingPaguro(hand, die))) {
+    return hand
+  }
+  const own = hand.own.map((die, i) =>
+    hidden.has(i) || isPendingPaguro(hand, die) ? maskDie(die) : die,
+  ) as unknown as OwnDice
+  return { ...hand, own }
+}
+
+/**
+ * Masks only what is unknown to EVERYONE in `hand`: a Dado Paguro whose face has not been
+ * chosen yet. Used for the OPPONENT's hand, whose values are otherwise open information — a
+ * pending Paguro is not "hidden from its owner", it is genuinely undecided, so nobody sees it.
+ */
+function maskPendingPaguro(hand: PlayerHandState): PlayerHandState {
+  if (hand.own === null || !hand.own.some((die) => isPendingPaguro(hand, die))) {
+    return hand
+  }
+  const own = hand.own.map((die) =>
+    isPendingPaguro(hand, die) ? maskDie(die) : die,
+  ) as unknown as OwnDice
   return { ...hand, own }
 }
 
 /**
  * The state as `seat` is allowed to perceive it.
  *
- * Only that seat's OWN concealed dice are masked. The opponent's dice are open
- * information in this game and stay fully visible — including a die the opponent cannot
- * see themselves, which is precisely the advantage a Nero di Seppia buys.
+ * Two kinds of masking, deliberately asymmetric:
+ *  - The seat's OWN concealed dice (a Nero di Seppia) are hidden from it. The opponent's dice
+ *    are open information and stay fully visible — including a die the opponent cannot see
+ *    themselves, which is precisely the advantage a Nero di Seppia buys.
+ *  - A Dado Paguro awaiting its blind pick is covered on EITHER seat's dice: its face is not
+ *    decided yet, so it is unknown to everyone, not merely hidden from its owner. Masking the
+ *    seat's own pending Paguro is the whole point of "al buio"; masking the opponent's keeps
+ *    the covered die honest on the human's screen too.
  */
 export function viewFor(state: GameState, seat: PlayerId): GameState {
-  const hand = state.hands[seat]
-  if (hand.own === null || hand.concealedIndices.length === 0) {
+  const other = otherPlayer(seat)
+  const ownMasked = maskOwnHand(state.hands[seat])
+  const otherMasked = maskPendingPaguro(state.hands[other])
+  if (ownMasked === state.hands[seat] && otherMasked === state.hands[other]) {
     return state
   }
-  return { ...state, hands: { ...state.hands, [seat]: maskHand(hand) } }
+  return {
+    ...state,
+    hands: { ...state.hands, [seat]: ownMasked, [other]: otherMasked },
+  }
 }
 
 /** True when `seat` cannot see own die `index` this hand. */

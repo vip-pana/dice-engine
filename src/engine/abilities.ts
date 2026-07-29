@@ -17,7 +17,8 @@
 //   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in game.ts
 //   - DADO_LANTERNA reveals INFORMATION   -> handleLanternPeek in game.ts
 //   - DADO_BRUMEGGIO reshapes the OPPONENT'S ROLLS -> RollModifiers below + isFogged in game.ts
-// All seven are named here so the pattern is discoverable from the registry. A new ability
+//   - DADO_PAGURO leaves the kept face to a PLAYER CHOICE -> handlePaguroChoose in game.ts
+// All eight are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
 //
 // DADO_BRUMEGGIO is the odd one out among those seven, and the reason the constraint above
@@ -119,6 +120,17 @@ function keepHighest(rolls: readonly DieValue[]): DieValue {
 /** Lowest of the rolled faces. Mirror of keepHighest; used by the fog, not by any spec. */
 function keepLowest(rolls: readonly DieValue[]): DieValue {
   return rolls.reduce<DieValue>((worst, v) => (v < worst ? v : worst), 6)
+}
+
+/**
+ * First of the rolled faces. Used ONLY by the Dado Paguro's spec, and only as a PLACEHOLDER:
+ * the Paguro's real kept face is chosen by the player in PAGURO_SELECT (see handlePaguroChoose
+ * in game.ts), not decided here. A spec must return a valid DieValue drawn from `rolls`, and
+ * `rolls[0]` is the simplest one that satisfies the registry self-consistency test. It is
+ * overwritten the moment the player picks, and never shown before then (see viewFor).
+ */
+function keepFirst(rolls: readonly DieValue[]): DieValue {
+  return rolls[0]!
 }
 
 /**
@@ -340,6 +352,38 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
+  },
+  DADO_PAGURO: {
+    id: 'DADO_PAGURO',
+    name: 'Dado Paguro',
+    description:
+      'Si divide in 3 dadi coperti: ne scegli uno al buio, senza vederne i valori, e tieni quello. Solo sui tuoi dadi.',
+    // A hermit crab, which is exactly the fantasy: it feels around blindly for a shell and
+    // keeps whichever it grabs. Reads at a glance and matches the die's own name.
+    icon: '🦀',
+    // A malus, and it must read violet. Measured against the Stella it echoes — which keeps
+    // the MAX of 3 (E 4.958) — choosing blind gives that edge up: the kept value is a plain
+    // uniform d6 (E 3.500). The die's worth is the ACT of choosing, not the odds.
+    kind: 'malus',
+    // ownOnly: the blind pick needs an owner to make it, and a common die at the centre is
+    // open information resolved the instant it is rolled — nobody could choose it and there is
+    // no covered state to show. So it never drops among the commons (rollCommonDice filters
+    // ownOnly). Contrast the MULINELLO, which is not ownOnly and merely lies dormant unstolen:
+    // that one still has a decided face, this one does not.
+    ownOnly: true,
+    // Not spongeable: like the Stella and the D4 there is nothing pending to cancel by the time
+    // a target could be named. The Paguro's face IS chosen later than theirs, but the choice is
+    // the whole ability — a sponge would have to un-choose it, which is not a thing.
+    // Three raw faces, exactly like the Stella; the difference is only in who picks the keeper.
+    diceRolled: 3,
+    // The three faces are rolled here with the rest of the own dice; `resolve` returns only a
+    // PLACEHOLDER (see keepFirst). The real kept face is written by handlePaguroChoose in
+    // game.ts when the player picks in PAGURO_SELECT, because a spec may only decide a face
+    // from the rolls alone and this one waits for a blind player choice — the MULINELLO's
+    // lesson, one step further: not "decide after seeing the result", but "let the player
+    // decide WITHOUT seeing it".
+    roll: (rng) => rollFaces(rng, 3),
+    resolve: keepFirst,
   },
 }
 

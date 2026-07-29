@@ -349,7 +349,7 @@ export function playHeuristicHand(
   const common = rollCommonDice(rng)
   const { die: stolen } = chooseStolenDie(own, common)
   const reroll = new Set(chooseRerollIndices(own, stolen, rng, 60, maxReroll))
-  return applyMulinello(finalHand(own, stolen, reroll, rng), rng)
+  return applyPaguro(applyMulinello(finalHand(own, stolen, reroll, rng), rng), rng)
 }
 
 /**
@@ -386,4 +386,30 @@ function applyMulinello(hand: Hand, rng: Rng): Hand {
 
   const after = own.map((die, i) => (i === index ? rerollDie(rng, die) : die))
   return [after[0]!, after[1]!, after[2]!, after[3]!, stolen]
+}
+
+/**
+ * Makes the Dado Paguro's blind pick for the simulator: keeps a uniformly-chosen one of its
+ * three rolled faces.
+ *
+ * No EV to compute — the choice is blind, so every index is equally good and the kept value is
+ * a plain d6 (E 3.500). This exists for FIDELITY, not balance: rollOwnDice already leaves the
+ * die on a uniform placeholder face (keepFirst), so the measured strength is the same with or
+ * without this step. It models the real PAGURO_SELECT so the harness plays the same hand the
+ * reducer would, rather than silently standing on the placeholder.
+ *
+ * Own dice only, matching applyMulinello: the die is ownOnly, so it can never be the stolen one.
+ */
+function applyPaguro(hand: Hand, rng: Rng): Hand {
+  const own: OwnDice = [hand[0], hand[1], hand[2], hand[3]]
+  const index = own.findIndex((d) => d.ability === 'DADO_PAGURO')
+  if (index === -1) {
+    return hand
+  }
+  const die = own[index]!
+  // A Paguro always carries its three rolled faces; fall back to its current value defensively.
+  const faces = die.rolls ?? [die.value]
+  const kept = faces[rng.nextInt(0, faces.length - 1)]!
+  const after = own.map((d, i) => (i === index ? { ...d, value: kept } : d))
+  return [after[0]!, after[1]!, after[2]!, after[3]!, hand[4]]
 }

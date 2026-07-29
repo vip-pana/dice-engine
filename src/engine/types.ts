@@ -122,6 +122,28 @@ export type AbilityId =
    * that already separates the `drops` and `deck` own-dice modes (see drawLoadouts).
    */
   | 'DADO_BRUMEGGIO'
+  /**
+   * Rolls 3 dice like the Stella Essiccata, but the OWNER chooses which one to keep — BLIND,
+   * without seeing any of the three faces. The interactive twin of the Stella: where that one
+   * keeps the max automatically (E 4.958), this one hands the pick to the player.
+   *
+   * Because the choice is blind, picking one of three is a uniform draw, so the kept value is
+   * a plain d6 (E 3.500, P(6) 1/6) — exactly a neutral die. Classified `malus` because,
+   * measured against the Stella it echoes, you give up the "keep the highest" edge. Its whole
+   * content is the ACT of choosing, not the odds.
+   *
+   * The first ability whose die has NO decided value at roll time: the three faces are rolled
+   * with the rest of the own dice (recorded in `rolls`), but the kept one is not known until
+   * the player picks it in a PAGURO_SELECT phase (see handlePaguroChoose in game.ts) — like
+   * the MULINELLO, a decision that cannot live in the pure `resolve`. Until then the die is
+   * shown covered to everyone (see viewFor in view.ts), and `resolve` returns only a
+   * placeholder face. The one-shot choice is tracked as `paguroChosen` on PlayerHandState.
+   *
+   * `ownOnly`: the pick needs an owner, and a common die at the centre is open information
+   * resolved the instant it is rolled — there is nobody to choose it and no way to show it
+   * covered. So it never drops among the commons, unlike the MULINELLO which merely lies dormant.
+   */
+  | 'DADO_PAGURO'
 
 /**
  * A rolled die.

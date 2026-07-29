@@ -39,6 +39,8 @@ export function otherPlayer(p: PlayerId): PlayerId {
  *                      the results are on the table before anything downstream.
  *  MULINELLO_SELECT -> SKIPPED unless a seat holds a Mulinello: that seat, having seen the
  *                      reroll, chooses whether to roll that one die a third time
+ *  PAGURO_SELECT    -> SKIPPED unless a seat holds a Dado Paguro: that seat picks, BLIND, which
+ *                      of its Paguro's three covered faces to keep (see handlePaguroChoose)
  *  SECOND_BET       -> primary bets >= first bet; opponent see/raise (no check, no fold)
  *  SHOWDOWN         -> hands compared, pot awarded (or split + replay on total tie)
  *  HAND_COMPLETE    -> result recorded; ready to start next hand or end the match
@@ -47,9 +49,10 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * Note: the dice rolls (own + common) happen deterministically on transition INTO
  * STEAL, so there is no separate "rolling" phase to click through.
  *
- * MULINELLO_SELECT is skipped when nobody holds the ability, so a match without one runs
- * through exactly the phases it always did. That is deliberate: a phase that appeared in
- * every hand would make every existing caller pay for an ability it is not using.
+ * MULINELLO_SELECT and PAGURO_SELECT are both skipped when nobody holds the ability, so a
+ * match without one runs through exactly the phases it always did. That is deliberate: a phase
+ * that appeared in every hand would make every existing caller pay for an ability it is not
+ * using.
  *
  * Consequence of resolving the reroll in REROLL_SELECT rather than at the showdown: the
  * second bet is now placed with the final dice KNOWN. That trade is the price of an ability
@@ -61,6 +64,7 @@ export type Phase =
   | 'STEAL'
   | 'REROLL_SELECT'
   | 'MULINELLO_SELECT'
+  | 'PAGURO_SELECT'
   | 'SECOND_BET'
   | 'SHOWDOWN'
   | 'HAND_COMPLETE'
@@ -112,6 +116,20 @@ export interface PlayerHandState {
    * otherwise the same seat could keep rolling until it liked the face.
    */
   readonly mulinelloUsed: boolean
+  /**
+   * Whether this seat has already made its Dado Paguro's blind pick this hand.
+   *
+   * The Paguro is rolled with the rest of the own dice but its kept face is not decided until
+   * the player picks one of the three covered faces in PAGURO_SELECT. Until then the die is
+   * pending: `own[i].value` holds only a placeholder and the die is shown covered to everyone
+   * (see viewFor). This flag is what tells pending from resolved — false while the seat still
+   * owes the choice, true once handlePaguroChoose has written the chosen face into `own`.
+   *
+   * Only meaningful for a seat that actually holds a Paguro; false is the honest default for a
+   * seat that has none, and the PAGURO_SELECT phase is skipped for it. One-shot, reset every
+   * hand by emptyHandState — a fresh Paguro next hand is a fresh blind pick.
+   */
+  readonly paguroChosen: boolean
   /**
    * Whether this seat has already spent its Lanterna's peek at the opponent's deck this hand.
    *

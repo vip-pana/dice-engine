@@ -156,6 +156,8 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
       return chooseReroll(seen, player, rng)
     case 'MULINELLO_SELECT':
       return chooseMulinello(seen, player)
+    case 'PAGURO_SELECT':
+      return choosePaguro(seen, player, rng)
     case 'SECOND_BET':
       return chooseSecondBet(seen, player)
     case 'SHOWDOWN':
@@ -336,6 +338,22 @@ function chooseMulinello(state: GameState, player: PlayerId): Action {
   return reroll > keep
     ? { type: 'MULINELLO_ROLL', player }
     : { type: 'MULINELLO_PASS', player }
+}
+
+// --- PAGURO_SELECT: a blind pick among three covered faces ---
+
+/**
+ * Picks one of the Dado Paguro's three covered faces. BLIND by construction: the bot reads the
+ * filtered view, where its own pending Paguro is masked, so it cannot see the faces even if it
+ * wanted to — and it wouldn't matter, since a blind pick is a uniform draw whatever the index.
+ *
+ * There is therefore no strategy to have and none is faked. The index is drawn from the Rng so
+ * two Paguri in one hand do not both grab the same slot for no reason, but any fixed index would
+ * be exactly as strong. Consumes one draw, in a player-action path — the same reproducibility
+ * rule the Mulinello's branch follows.
+ */
+function choosePaguro(_state: GameState, player: PlayerId, rng: Rng): Action {
+  return { type: 'PAGURO_CHOOSE', player, index: rng.nextInt(0, 2) }
 }
 
 // --- SECOND_BET: threshold on current hand strength ---
