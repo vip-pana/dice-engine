@@ -76,7 +76,25 @@ export function DeckBuilder({
       <h2 style={{ fontSize: 14, color: '#94a3b8', marginBottom: 8, marginTop: 24 }}>
         Dadi speciali disponibili
       </h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/*
+        A GRID, not the single column this used to be: at eight registered abilities the list
+        ran off the fold and the choice stopped being scannable. `auto-fit` with a 240px floor
+        rather than a fixed column count, so it collapses to one column on a narrow screen
+        instead of squeezing two unreadable ones — the cards already carry `width: 100%` and
+        `minWidth: 0`, so they fit whatever track they land in and wrap their text.
+
+        `alignItems: start` because the descriptions differ wildly in length (one line for the
+        D4, four for the Spugna). Grid's default `stretch` would pad every card out to its
+        tallest neighbour, leaving dead space that reads as a rendering fault.
+      */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          alignItems: 'start',
+          gap: 8,
+        }}
+      >
         {ALL_ABILITY_IDS.map((id) => (
           <AbilityCard
             key={id}
