@@ -491,8 +491,9 @@ function settleWindow(state: GameState, rng: Rng): GameState {
   if (state.phase === 'INITIAL_BET') {
     return startHandAfterInitialBet(state, rng)
   }
-  // SECOND_BET settled -> apply rerolls and go to showdown.
-  return goToShowdown(state, rng)
+  // SECOND_BET settled -> NOW throw the chosen dice, then the abilities that need the result,
+  // then the showdown. The betting is over before any of it, which is the whole point.
+  return resolveRerollAfterBetting(state, rng)
 }
 
 // --- Transition: initial bet settled -> roll dice, go to STEAL ---
@@ -1019,13 +1020,23 @@ function handleReroll(
     return { ...next, toAct: nonPrimary }
   }
 
-  // Both selections in, so the dice can actually be thrown. This used to wait until the
-  // showdown; the Mulinello moved it here, because "reroll again if you dislike the result"
-  // needs the result to exist while the hand is still live. Rolling both seats in one step
-  // (rather than each at its own REROLL) keeps neither seat's choice informed by the other's
-  // outcome — the selections were made blind, and they resolve blind.
-  next = applyRerollSelections(next, rng)
-  return afterRerollResolved(next, rng)
+  // Both selections in. The dice are NOT thrown yet: the second bet comes first, so a player
+  // wagers on a hand they have chosen to change but not yet seen the result of. Betting after
+  // the throw made the round pointless — with both hands public and final, the winner was
+  // already determined, so the only correct plays were "fold every loss, raise every win".
+  return enterSecondBet(next, rng)
+}
+
+/**
+ * The second bet has closed (or was skipped for want of chips): throw the chosen dice, then run
+ * the abilities whose decision needs the result to exist, then go to the showdown.
+ *
+ * This is the whole post-betting tail of a hand, in one place, because two callers reach it —
+ * the settled betting round and the all-in shortcut inside enterSecondBet — and a hand that
+ * skipped the betting must still get its dice thrown.
+ */
+function resolveRerollAfterBetting(state: GameState, rng: Rng): GameState {
+  return afterRerollResolved(applyRerollSelections(state, rng), rng)
 }
 
 /** Throws each seat's chosen dice and persists the results into `own`. */
@@ -1045,8 +1056,8 @@ function applyRerollSelections(state: GameState, rng: Rng): GameState {
     const own = applyReroll(hand.own, hand.rerollSelection ?? [], rng, modsFor(next, seat))
     next = setHand(next, seat, { own })
   }
-  // Printed even when nothing was rerolled: the line is the record of what is on the table
-  // going into the second bet, which is now placed with these values known.
+  // Printed even when nothing was rerolled: the line is the record of what the betting was
+  // resolved into — the first time anyone, player or bot, sees these values.
   return withLog(
     next,
     `Dopo il rilancio — Tu: ${handStr(next, 'human')}. Bot: ${handStr(next, 'bot')}.`,
@@ -1054,7 +1065,7 @@ function applyRerollSelections(state: GameState, rng: Rng): GameState {
 }
 
 /**
- * Routes out of REROLL_SELECT once the dice have been thrown.
+ * Routes onward once the dice have been thrown, which is now AFTER the second bet.
  *
  * MULINELLO_SELECT is entered ONLY when a seat can act in it. A phase that showed up in every
  * hand would force every caller — bot, tests, UI — to click through a decision nobody has,
@@ -1064,7 +1075,7 @@ function afterRerollResolved(state: GameState, rng: Rng): GameState {
   const first = firstMulinelloSeat(state)
   if (first === null) {
     // No Mulinello — the Paguro's blind pick, if any, is the next decision after the reroll.
-    return enterPaguroSelectOrSecondBet(state, rng)
+    return enterPaguroSelectOrShowdown(state, rng)
   }
   return withLog(
     { ...state, phase: 'MULINELLO_SELECT', toAct: first },
@@ -1124,21 +1135,21 @@ function handleMulinello(
     return { ...next, toAct: remaining }
   }
   // Mulinelli done — the Paguro's blind pick, if any, comes next.
-  return enterPaguroSelectOrSecondBet(next, rng)
+  return enterPaguroSelectOrShowdown(next, rng)
 }
 
 // --- PAGURO_SELECT: the blind pick among a Dado Paguro's three covered faces ---
 
 /**
- * Routes out of the reroll/Mulinello step into PAGURO_SELECT, or straight to the second bet.
+ * Routes out of the reroll/Mulinello step into PAGURO_SELECT, or straight to the showdown.
  *
  * Entered ONLY when a seat can act in it, exactly like MULINELLO_SELECT: a hand with no Paguro
  * follows the path it always did, so no existing caller pays for a phase it has no decision in.
  */
-function enterPaguroSelectOrSecondBet(state: GameState, rng: Rng): GameState {
+function enterPaguroSelectOrShowdown(state: GameState, rng: Rng): GameState {
   const first = firstPaguroSeat(state)
   if (first === null) {
-    return enterSecondBet(state, rng)
+    return goToShowdown(state, rng)
   }
   return withLog(
     { ...state, phase: 'PAGURO_SELECT', toAct: first },
@@ -1249,7 +1260,7 @@ function handlePaguroChoose(
   if (remaining !== null) {
     return { ...next, toAct: remaining }
   }
-  return enterSecondBet(next, rng)
+  return goToShowdown(next, rng)
 }
 
 /**
@@ -1346,11 +1357,13 @@ function enterSecondBet(state: GameState, rng: Rng): GameState {
     },
   }
 
-  // Someone is already all-in from the first round: there is nothing left to wager, so
-  // go straight to the showdown rather than asking for a bet nobody can make.
+  // Someone is already all-in from the first round: there is nothing left to wager, so skip
+  // asking for a bet nobody can make. It must still go through resolveRerollAfterBetting and
+  // not straight to the showdown — the chosen dice have not been thrown yet at this point, and
+  // jumping the queue would send unrerolled hands to the comparison.
   if (noChipsBehind(reset)) {
-    return goToShowdown(
-      withLog(reset, 'Nessuno ha altre monete da puntare: si va direttamente allo showdown.'),
+    return resolveRerollAfterBetting(
+      withLog(reset, 'Nessuno ha altre monete da puntare: si tira e si va allo showdown.'),
       rng,
     )
   }

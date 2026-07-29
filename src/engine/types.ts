@@ -55,10 +55,16 @@ export type AbilityId =
    * result.
    *
    * The first ability whose decision must be made with the outcome already known, which is
-   * why it is the first one to change the PHASE ORDER rather than just a value: the reroll
-   * now resolves at the end of REROLL_SELECT, and a MULINELLO_SELECT phase asks the holder
-   * whether to spend the extra roll (see handleMulinello in game.ts). Every earlier ability
-   * could be decided blind, so none of them needed a moment that did not already exist.
+   * why it is the first one to change the PHASE ORDER rather than just a value: a
+   * MULINELLO_SELECT phase asks the holder whether to spend the extra roll (see
+   * handleMulinello in game.ts). Every earlier ability could be decided blind, so none of them
+   * needed a moment that did not already exist.
+   *
+   * That phase sits AFTER the second bet, together with the reroll it needs the result of. It
+   * briefly sat before the bet instead, which let it inform the wager — and cost the wager its
+   * meaning, since the dice were then final while the betting was still open (see the Phase docs
+   * in gameTypes.ts). So the Mulinello has no betting leverage: it improves a hand whose stake
+   * is already set.
    *
    * The choice is one-shot, tracked as `mulinelloUsed` on PlayerHandState. Stealing one from
    * the commons works and hands the thief the choice; left unstolen it does nothing, since an

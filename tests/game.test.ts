@@ -198,7 +198,11 @@ describe('a bet can never exceed the bankroll', () => {
 
     expect(s.phase).not.toBe('SECOND_BET')
     expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
-    expect(s.log.some((l) => /direttamente allo showdown/.test(l))).toBe(true)
+    expect(s.log.some((l) => /si tira e si va allo showdown/.test(l))).toBe(true)
+    // The skip must not skip the THROW: with the reroll now resolving after the betting, a hand
+    // that never gets a second betting round still has to have its chosen dice rolled before
+    // the comparison. This is the line that catches a shortcut jumping straight to the showdown.
+    expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(true)
   })
 })
 
@@ -446,5 +450,90 @@ describe('determinism', () => {
     expect(a.score).toEqual(b.score)
     expect(a.matchWinner).toBe(b.matchWinner)
     expect(a.log).toEqual(b.log)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The second bet is a WAGER: the chosen dice are thrown only after it closes.
+//
+// This ordering is the point of the whole betting round, and it has regressed once already.
+// When the Mulinello was added the reroll moved earlier, to the end of REROLL_SELECT, so the
+// second bet ended up being placed with the final dice known. Since both hands are public in
+// this game that made the round a solved decision rather than a bet: the winner was already
+// determined, so the only correct plays were "fold every loss, raise every win". These tests
+// pin the ordering that stops that, in both directions — the dice must NOT be thrown before the
+// round, and they MUST be thrown after it.
+// ---------------------------------------------------------------------------
+
+describe('the second bet is placed before the dice are thrown', () => {
+  /** ROLL_OFF -> ... -> SECOND_BET, with `indices` selected for reroll by both seats. */
+  function playToSecondBet(state: GameState, rng: Rng, indices: readonly number[]): GameState {
+    let s = rollOffUntilDecided(state, rng)
+    const np = otherPlayer(s.primary)
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    s = reducer(s, { type: 'CALL', player: np }, rng)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: indices }, rng)
+    s = reducer(s, { type: 'REROLL', player: np, ownIndices: indices }, rng)
+    expect(s.phase).toBe('SECOND_BET')
+    return s
+  }
+
+  it('records the selection but leaves the dice untouched until the round closes', () => {
+    const rng = createRng(4242)
+    const s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
+
+    // The intent is on the state...
+    expect(s.hands.human.rerollSelection).toEqual([0, 1, 2, 3])
+    expect(s.hands.bot.rerollSelection).toEqual([0, 1, 2, 3])
+    // ...but nothing has been thrown, so the line that reports the thrown dice cannot exist yet.
+    expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(false)
+  })
+
+  it('throws them once the round closes, and only then', () => {
+    const rng = createRng(4243)
+    let s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
+    const before = s.hands.human.own!.map((d) => d.value)
+
+    s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+    // Still open: one seat has yet to answer, so the dice must still be as they were.
+    expect(s.phase).toBe('SECOND_BET')
+    expect(s.hands.human.own!.map((d) => d.value)).toEqual(before)
+
+    s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+    expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(true)
+    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
+  })
+
+  it('leaves the outcome genuinely undecided at the moment of betting', () => {
+    // THE anti-regression test, and the reason the ordering matters at all. Comparing the two
+    // hands on the table at the second bet must NOT reliably tell you who wins — otherwise the
+    // round is arithmetic, not a wager. Both seats reroll all four dice here, so the visible
+    // dice are nearly all about to be replaced; the leader should win barely more often than
+    // chance. (Measured at the old ordering this figure was 100%.)
+    let hands = 0
+    let leaderWon = 0
+    for (let seed = 1; seed <= 150; seed++) {
+      const rng = createRng(seed)
+      let s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
+      const score = (seat: PlayerId): number => {
+        const h = s.hands[seat]
+        return h.own!.reduce((sum, d) => sum + d.value, 0) + h.stolen!.value
+      }
+      const leader: PlayerId = score('human') >= score('bot') ? 'human' : 'bot'
+
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
+      s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+      const outcome = s.lastShowdown?.outcome
+      if (outcome === undefined || outcome.kind !== 'win') {
+        continue
+      }
+      hands++
+      if (outcome.winner === leader) leaderWon++
+    }
+    expect(hands).toBeGreaterThan(80)
+    // Comfortably below certainty: the pre-throw leader is not the winner.
+    expect(leaderWon / hands).toBeLessThan(0.8)
   })
 })

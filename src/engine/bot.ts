@@ -100,7 +100,18 @@ function betOrCall(
 }
 
 function normalizedStrength(hand: Hand): number {
-  const raw = handScore(hand)
+  return normalizeScore(handScore(hand))
+}
+
+/**
+ * Maps a raw handScore (or an expected one) into [0, 1] against the same anchors.
+ *
+ * Split out from normalizedStrength so an EXPECTED score — which is an average and therefore
+ * not any real hand's score — can be normalized on the identical scale. Sharing the scale is
+ * what lets BOT_TUNING's thresholds keep their meaning whether the bot is pricing settled dice
+ * or dice it is about to throw.
+ */
+function normalizeScore(raw: number): number {
   const clamped = Math.max(MIN_SCORE, Math.min(MAX_SCORE, raw))
   return (clamped - MIN_SCORE) / (MAX_SCORE - MIN_SCORE)
 }
@@ -356,14 +367,36 @@ function choosePaguro(_state: GameState, player: PlayerId, rng: Rng): Action {
   return { type: 'PAGURO_CHOOSE', player, index: rng.nextInt(0, 2) }
 }
 
-// --- SECOND_BET: threshold on current hand strength ---
+// --- SECOND_BET: threshold on the strength this hand is EXPECTED to end up with ---
+
+/**
+ * Normalized strength to bet on at the second bet, accounting for the reroll still pending.
+ *
+ * The dice on the table are not this hand's final dice: the reroll selection was made in
+ * REROLL_SELECT but is thrown only once this betting round closes. Pricing the visible dice
+ * would misread every hand that chose to reroll — worst of all the good ones, since a seat
+ * that kept everything and a seat that is about to replace three dice would score identically.
+ *
+ * `exactRerollEV` enumerates all 6^k outcomes of the pending dice, which is the same exact
+ * arithmetic the solver and chooseMulinello already use, so the bot cannot drift away from them.
+ * Its documented blind spots are inherited unchanged: it assumes a uniform 1..6 face, so a
+ * pending Stella, D4 or Paguro — or any die rolled in a Brumeggio's fog — is mispriced.
+ */
+function pendingStrength(state: GameState, player: PlayerId, hand: Hand): number {
+  const h = state.hands[player]
+  const pending = h.rerollSelection ?? []
+  if (h.own === null || h.stolen === null || pending.length === 0) {
+    return normalizedStrength(hand)
+  }
+  return normalizeScore(exactRerollEV(h.own, h.stolen, pending))
+}
 
 function chooseSecondBet(state: GameState, player: PlayerId): Action {
   const hand = currentHand(state, player)
   if (hand === null) {
     throw new Error('[bot] second bet requested before hand is formed')
   }
-  const strength = normalizedStrength(hand)
+  const strength = pendingStrength(state, player, hand)
   const canRaise = state.raisesThisWindow < state.config.maxRaisesPerWindow
   const wantsRaise = strength >= BOT_TUNING.raiseAtLeast && canRaise
 

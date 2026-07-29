@@ -332,6 +332,12 @@ describe('deck mode in a match', () => {
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
     s = reducer(s, reroll(s, s.primary), rng)
     s = reducer(s, reroll(s, other(s.primary)), rng)
+    // The second bet is settled BEFORE the chosen dice are thrown; the Mulinello and Paguro
+    // phases (which need a result to look at) come after it.
+    if (s.phase === 'SECOND_BET') {
+      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+    }
     // A full deck can hand a seat a Mulinello, which opens a phase of its own. Decline it:
     // this helper is about deck plumbing, and an extra roll would move the dice underneath
     // tests that are measuring something else.
@@ -342,10 +348,6 @@ describe('deck mode in a match', () => {
     // Make the pick (index 0) so the hand can finish; the face is neutral either way.
     while (s.phase === 'PAGURO_SELECT') {
       s = reducer(s, { type: 'PAGURO_CHOOSE', player: s.toAct, index: 0 }, rng)
-    }
-    if (s.phase === 'SECOND_BET') {
-      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
     }
     return s
   }
