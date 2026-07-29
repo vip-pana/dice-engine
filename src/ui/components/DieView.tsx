@@ -91,7 +91,12 @@ export function DieView(props: DieViewProps): JSX.Element {
   const spec = abilitySpec(ability)
   // A concealed die shows neither pips nor split: its `value` is a placeholder, and the
   // split would spell out the very face being hidden.
-  const split = !concealed && spec !== null && rolls !== undefined && rolls.length > 1 ? rolls : null
+  //
+  // Not gated on having an ability: a PLAIN die rolled in fog (an opponent's Dado Brumeggio)
+  // carries two faces and no ability of its own, and showing "5 2" with the kept one lit is
+  // the clearest way the fog reads as a rule. A clear plain die has no `rolls`, so it is
+  // unaffected.
+  const split = !concealed && rolls !== undefined && rolls.length > 1 ? rolls : null
   const accent = concealed ? CONCEALED_ACCENT : accentForAbility(ability)
 
   const border = selected

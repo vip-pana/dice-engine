@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  ALL_ABILITY_IDS,
+  SPONGE_PRIORITY,
   createInitialState,
+  isSpongeable,
   reducer,
   chooseAction,
   createRng,
@@ -50,6 +53,17 @@ describe('bot plays only legal actions', () => {
     expect(a.log).toEqual(b.log)
     expect(a.matchWinner).toBe(b.matchWinner)
     expect(a.score).toEqual(b.score)
+  })
+
+  it('knows how to sponge every ability that CAN be sponged', () => {
+    // SPONGE_PRIORITY is a plain array, not a Record over AbilityId, so a new spongeable
+    // ability compiles perfectly while the bot silently never sponges it — a bug nothing else
+    // would catch. This test is what makes that omission fail instead.
+    //
+    // DADO_SPUGNA is excluded because a Spugna cannot absorb another Spugna (the reducer
+    // asserts it); every other spongeable ability must be ranked.
+    const expected = ALL_ABILITY_IDS.filter((id) => isSpongeable(id) && id !== 'DADO_SPUGNA')
+    expect([...SPONGE_PRIORITY].sort()).toEqual([...expected].sort())
   })
 })
 

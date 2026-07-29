@@ -1,5 +1,12 @@
 import { evaluateHand, compareHands } from './hand'
-import { ALL_ABILITY_IDS, abilitySpec, rerollDie, rollDieWithAbility } from './abilities'
+import {
+  ALL_ABILITY_IDS,
+  NO_MODIFIERS,
+  abilitySpec,
+  rerollDie,
+  rollDieWithAbility,
+  type RollModifiers,
+} from './abilities'
 import type { AbilityId, Die, DieValue, Hand } from './types'
 import type { Rng } from './rng'
 
@@ -128,13 +135,22 @@ export function rollRandomLoadout(
   return [s[0] ?? null, s[1] ?? null, s[2] ?? null, s[3] ?? null]
 }
 
-/** Rolls 4 fresh own dice, applying each slot's ability from the loadout. */
-export function rollOwnDice(rng: Rng, loadout: Loadout = PLAIN_LOADOUT): OwnDice {
+/**
+ * Rolls 4 fresh own dice, applying each slot's ability from the loadout.
+ *
+ * `mods` applies to all four dice, because it describes the SEAT rolling them, not any one
+ * die — an opponent's Dado Brumeggio fogs everything this seat throws.
+ */
+export function rollOwnDice(
+  rng: Rng,
+  loadout: Loadout = PLAIN_LOADOUT,
+  mods: RollModifiers = NO_MODIFIERS,
+): OwnDice {
   return [
-    rollDieWithAbility(rng, loadout[0] ?? undefined),
-    rollDieWithAbility(rng, loadout[1] ?? undefined),
-    rollDieWithAbility(rng, loadout[2] ?? undefined),
-    rollDieWithAbility(rng, loadout[3] ?? undefined),
+    rollDieWithAbility(rng, loadout[0] ?? undefined, mods),
+    rollDieWithAbility(rng, loadout[1] ?? undefined, mods),
+    rollDieWithAbility(rng, loadout[2] ?? undefined, mods),
+    rollDieWithAbility(rng, loadout[3] ?? undefined, mods),
   ]
 }
 
@@ -145,6 +161,9 @@ export function rollOwnDice(rng: Rng, loadout: Loadout = PLAIN_LOADOUT): OwnDice
  * own (lower) drop rate. A stolen special die keeps its ability, so the steal becomes
  * "high value now, or a die that rerolls better". With NO_ABILITY_DROPS this is
  * bit-for-bit plain.
+ *
+ * Takes no RollModifiers, deliberately: a common die is rolled while it belongs to nobody, so
+ * no seat's fog can reach it. "Whose fog was this rolled in?" has no answer at the centre.
  */
 export function rollCommonDice(
   rng: Rng,
@@ -314,6 +333,12 @@ export function chooseStolenDie(
  * The Mulinello step lives here rather than only in the reducer because this function is the
  * simulator's whole model of a hand. Without it the balance harness would measure a Mulinello
  * that never fires and report it as worth nothing.
+ *
+ * DADO_BRUMEGGIO is the standing exception to that lesson, and knowingly so: this function
+ * plays ONE seat, so it has no notion of two loadouts interacting, and a fog is by definition
+ * something the other seat imposes. The balance harness will therefore report the Brumeggio at
+ * roughly break-even — not a bug in the ability, a limit of a one-seat model. Measuring it
+ * needs a two-seat harness, which is a separate change.
  */
 export function playHeuristicHand(
   rng: Rng,

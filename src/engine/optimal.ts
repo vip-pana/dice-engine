@@ -25,6 +25,10 @@ const FACES: readonly DieValue[] = [1, 2, 3, 4, 5, 6]
  * arithmetic the solver uses, instead of a second, drifting EV estimate. Note the uniform
  * 1..6 assumption: valid for a plain die or a Mulinello, WRONG for an ability that reshapes
  * its faces (a Stella keeps max-of-3, a D4 caps at 4), so do not price those with this.
+ *
+ * Also WRONG for any die rolled in fog: an opponent's Dado Brumeggio makes every reroll
+ * min-of-two, E[face] 2.528 rather than 3.500, so this over-values rerolling in fog. The fog
+ * is a property of the SEAT, not of the die, so nothing in the dice passed here reveals it.
  */
 export function exactRerollEV(
   own: OwnDice,

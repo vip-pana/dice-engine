@@ -6,7 +6,13 @@
 // send legal actions; tests assert the guards).
 
 import { evaluateHand, compareHands } from './hand'
-import { abilitySpec, isSpongeable, rerollDie } from './abilities'
+import {
+  NO_MODIFIERS,
+  abilitySpec,
+  isSpongeable,
+  rerollDie,
+  type RollModifiers,
+} from './abilities'
 import {
   rollOwnDice,
   rollCommonDice,
@@ -493,8 +499,15 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   const loadouts = drawLoadouts(state, rng)
 
   // Own dice are rolled first (human then bot), then the common dice.
-  const humanOwn = rollOwnDice(rng, loadouts.human)
-  const botOwn = rollOwnDice(rng, loadouts.bot)
+  //
+  // A Dado Brumeggio fogs from the very FIRST roll, so the modifiers are derived before any
+  // die is thrown — an opponent's fog is already in force on the roll that reveals it. Note
+  // `loadouts` is passed explicitly: see isFogged for why state.loadouts is the wrong source
+  // at this exact instant.
+  const humanOwn = rollOwnDice(rng, loadouts.human, modsFor(state, 'human', loadouts))
+  const botOwn = rollOwnDice(rng, loadouts.bot, modsFor(state, 'bot', loadouts))
+  // The commons are rolled with no modifiers, deliberately: they belong to nobody when they
+  // are thrown, so no seat's fog applies to them.
   const common = rollCommonDice(rng, state.abilityDrops)
 
   let next: GameState = {
@@ -512,6 +525,22 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   // A Nero di Seppia in one seat's dice hides one of the OPPONENT's, so this has to run
   // after both hands exist.
   next = applyConcealment(next, rng)
+
+  // A landed fog is announced BEFORE the dice, so a reader meets the rule before the doubled
+  // faces it explains — the same ordering goToShowdown uses for the Torpedo's lines. Consumes
+  // no Rng and touches no state: isFogged is derived, so this is purely the record.
+  for (const seat of ['human', 'bot'] as const) {
+    if (isFogged(next, seat, loadouts)) {
+      // Phrased to put the victim in the SUBJECT rather than after a preposition: labelOf gives
+      // "Tu" for the human, and "i dadi di Tu" is not Italian. The existing lines get away with
+      // "di Tu" only because the human is rarely the object there.
+      const victim = seat === 'human' ? 'i tuoi dadi escono' : 'i dadi del Bot escono'
+      next = withLog(
+        next,
+        `${labelOf(otherPlayer(seat))} lancia il Brumeggio: ${victim} due volte e tengono il più basso.`,
+      )
+    }
+  }
 
   // Log the full flow: both players' rolled dice, then the common dice.
   //
@@ -648,6 +677,64 @@ function seatHoldsActive(state: GameState, seat: PlayerId, ability: AbilityId): 
 }
 
 /**
+ * Whether `seat`'s dice are rolling in fog — an OPPONENT holds an active Dado Brumeggio.
+ *
+ * TWO SOURCES, and they are not interchangeable. The FIRST roll of the hand happens inside
+ * startHandAfterInitialBet, where the hands do not exist yet (`own` is null, nothing has been
+ * stolen) — only the loadouts have been drawn, a few lines earlier. Every LATER roll (both
+ * rerolls, and a Mulinello's third) happens with the hands fully formed, where seatHoldsActive
+ * is the right question because it also counts a die stolen from the commons and it respects
+ * a Spugna.
+ *
+ * Hence `loadouts` as an explicit parameter rather than a lookup on state: at first-roll time
+ * `state.loadouts` is still the PREVIOUS hand's for a drops- or deck-mode seat, because
+ * drawLoadouts returns the new ones and they are only written into the state afterwards.
+ * Passing them in is what stops this reading a stale hand.
+ *
+ * WHICH SEAT'S SPONGE: seatHoldsActive takes the ability's OWNER and looks up the other seat's
+ * spongeTarget itself. So `opponent` goes in as the owner, and the seat being protected is
+ * `seat` — the one in the fog, the one with a reason to have sponged. Said out loud because
+ * hasSponged's doc records a past bug where exactly this direction was silently backwards.
+ *
+ * An unowned common Brumeggio is NOT a source: "the opponent's rolls" means nothing for a die
+ * still sitting at the centre. See the spec comment in abilities.ts for why that differs from
+ * the Torpedo, which does stay live unowned.
+ */
+function isFogged(
+  state: GameState,
+  seat: PlayerId,
+  loadouts?: Readonly<Record<PlayerId, Loadout>>,
+): boolean {
+  const opponent = otherPlayer(seat)
+  if (loadouts !== undefined) {
+    // FIRST ROLL. No hands, no steals, and no Spugna yet — REROLL_SELECT is two phases away —
+    // so scanning the opponent's loadout is the whole answer.
+    return loadouts[opponent].includes('DADO_BRUMEGGIO')
+  }
+  return seatHoldsActive(state, opponent, 'DADO_BRUMEGGIO')
+}
+
+/** The roll modifiers in force for `seat` right now. See isFogged for the two sources. */
+function modsFor(
+  state: GameState,
+  seat: PlayerId,
+  loadouts?: Readonly<Record<PlayerId, Loadout>>,
+): RollModifiers {
+  return { fogged: isFogged(state, seat, loadouts) }
+}
+
+/**
+ * Whether `seat` is rolling in fog. Exported so the UI asks the reducer rather than keeping
+ * its own copy of the rule (same reasoning as inPeekablePhase and maxBetFor).
+ *
+ * Only the post-first-roll source is exposed: from STEAL onwards the hands exist, which is
+ * every phase the UI renders. The loadouts overload is an internal detail of one transition.
+ */
+export function seatIsFogged(state: GameState, seat: PlayerId): boolean {
+  return isFogged(state, seat)
+}
+
+/**
  * `unclaimedCommonIndex`, unless `protectedSeat` has sponged that ability.
  *
  * Per-seat, because a table effect is now asymmetric: one seat may have soaked up the common
@@ -766,12 +853,17 @@ function diceStr(dice: readonly Die[]): string {
 /** Formats one die, annotating an ability roll with its icon and the faces it produced. */
 function dieStr(die: Die): string {
   const spec = abilitySpec(die.ability)
-  if (spec === null) {
-    return `${die.value}`
-  }
-  // Only a multi-face ability has a split worth spelling out; a single-face one (the D4)
+  // Only a multi-face roll has a split worth spelling out; a single-face ability (the D4)
   // still gets its icon, so the log never hides which die produced the value.
+  //
+  // Gated on `rolls` alone rather than on having an ability: a PLAIN die rolled in fog has two
+  // faces and no ability of its own, and printing "2 (5/2)" is the clearest way the fog reads
+  // as a rule rather than as bad luck. A clear plain die still has no `rolls` at all, so it
+  // stays the bare value it always was.
   const split = die.rolls !== undefined && die.rolls.length > 1 ? ` (${die.rolls.join('/')})` : ''
+  if (spec === null) {
+    return `${die.value}${split}`
+  }
   return `${spec.icon}${die.value}${split}`
 }
 
@@ -925,7 +1017,15 @@ function applyRerollSelections(state: GameState, rng: Rng): GameState {
   for (const seat of ['human', 'bot'] as const) {
     const hand = next.hands[seat]
     assert(hand.own !== null, 'reroll resolved before the dice were rolled')
-    const own = applyReroll(hand.own, hand.rerollSelection ?? [], rng)
+    // No `loadouts` argument here: the hands exist, so seatHoldsActive is the right source —
+    // it counts a stolen Brumeggio and, crucially, it respects a Spugna.
+    //
+    // THE ORDERING THAT MAKES A SPONGED FOG LIFT: handleReroll writes spongeTarget onto the
+    // state before it calls this, so a Spugna named this very phase is already visible to
+    // seatHoldsActive by the time the dice are thrown. That is the whole mechanism — the fog
+    // is derived per roll, never stored, so there is nothing to clear. Move the sponge write
+    // after this call and the lift silently stops working.
+    const own = applyReroll(hand.own, hand.rerollSelection ?? [], rng, modsFor(next, seat))
     next = setHand(next, seat, { own })
   }
   // Printed even when nothing was rerolled: the line is the record of what is on the table
@@ -1021,10 +1121,15 @@ function rerollMulinelloDie(state: GameState, player: PlayerId, rng: Rng): GameS
   const hand = state.hands[player]
   assert(hand.own !== null, 'Mulinello used before the dice were rolled')
 
+  // Fogged if an opponent's Brumeggio is still active — so a seat that sponged it back in
+  // REROLL_SELECT gets a CLEAR third roll here. That is the most visible payoff of the
+  // sponge-as-reversal semantics, and the one players will notice.
+  const mods = modsFor(state, player)
+
   const ownIndex = hand.own.findIndex((die) => die.ability === 'MULINELLO')
   if (ownIndex !== -1) {
     const before = hand.own[ownIndex]!
-    const after = rerollDie(rng, before)
+    const after = rerollDie(rng, before, mods)
     const own = [...hand.own]
     own[ownIndex] = after
     const next = setHand(state, player, {
@@ -1038,7 +1143,7 @@ function rerollMulinelloDie(state: GameState, player: PlayerId, rng: Rng): GameS
 
   assert(hand.stolen?.ability === 'MULINELLO', 'Mulinello holder has no Mulinello die')
   const before = hand.stolen
-  const after = rerollDie(rng, before)
+  const after = rerollDie(rng, before, mods)
   return withLog(
     setHand(state, player, { stolen: after }),
     `Mulinello di ${labelOf(player)}: il dado rubato passa da ${before.value} a ${after.value}.`,
@@ -1118,9 +1223,14 @@ function enterSecondBet(state: GameState, rng: Rng): GameState {
  * Rerolls the selected own dice. A rerolled die keeps its ability: the ability belongs to
  * the physical die the player owns, so a Stella Essiccata re-splits into 3 on every reroll.
  */
-function applyReroll(own: OwnDice, selection: readonly number[], rng: Rng): OwnDice {
+function applyReroll(
+  own: OwnDice,
+  selection: readonly number[],
+  rng: Rng,
+  mods: RollModifiers = NO_MODIFIERS,
+): OwnDice {
   const set = new Set(selection)
-  const after = own.map((die, i) => (set.has(i) ? rerollDie(rng, die) : die))
+  const after = own.map((die, i) => (set.has(i) ? rerollDie(rng, die, mods) : die))
   return [after[0]!, after[1]!, after[2]!, after[3]!]
 }
 

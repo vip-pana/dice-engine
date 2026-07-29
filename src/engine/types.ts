@@ -100,6 +100,28 @@ export type AbilityId =
    * takes no turn — you can peek while waiting for the opponent.
    */
   | 'DADO_LANTERNA'
+  /**
+   * Fogs the OPPONENT for the whole hand: every die they roll rolls twice and keeps the
+   * LOWEST face. E[value] 3.500 -> 2.528, P(6) 16.7% -> 2.8%.
+   *
+   * The first ability that changes HOW A DIE IS ROLLED, rather than what one die shows or
+   * what the reducer does with the result afterwards. That makes it the first whose effect
+   * fits neither home the other eight use: an AbilitySpec may only decide its OWN die's face
+   * (so not `roll`), and there is no single moment for the reducer to act on (so not there
+   * either) — the first roll, both rerolls and a Mulinello's third roll are all fogged. It
+   * therefore lives at the one choke point every hand die passes through, as a RollModifiers
+   * argument to rollDieWithAbility, with `isFogged` in game.ts answering who is fogged.
+   *
+   * Not held state: the fog is re-derived at every roll from whoever holds the die, which is
+   * what lets a sponge lift it with nothing to clear. Note the two SOURCES, deliberately
+   * different: the first roll happens before `hands` exist, so it reads the LOADOUTS; every
+   * later roll reads seatHoldsActive, which also counts a die stolen from the commons.
+   *
+   * Consumes 2 draws per fogged die where a clear one consumes 1, so a hand containing one
+   * has a different Rng stream than the same seed without it. Expected, and the same caveat
+   * that already separates the `drops` and `deck` own-dice modes (see drawLoadouts).
+   */
+  | 'DADO_BRUMEGGIO'
 
 /**
  * A rolled die.

@@ -210,6 +210,13 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
   // own hand may be zapped by an opponent Torpedo — the same blind spot it has for the Nero
   // di Seppia and the Dado d'Oro. Teaching the reroll heuristic about pending effects is a
   // separate change.
+  //
+  // It is also blind to FOG: in a Dado Brumeggio's fog a fresh die averages 2.53 rather than
+  // 3.50, so the bot rerolls more than it should (it should keep more). Bounded and
+  // one-directional — the heuristic is an argmax over keep-sets, and the fog scales every
+  // candidate by the same factor, so it misjudges keep-vs-reroll rather than which dice to
+  // pick. Joins the same documented list as the Stella and the D4, which exactRerollEV has
+  // always mispriced for the same reason.
   const victim = otherPlayer(player)
   const victimHand = state.hands[victim]
   const sponge = chooseSponge(state, player)
@@ -231,13 +238,18 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
  * in this codebase to price them against. A fabricated EV number here would look rigorous and be
  * arbitrary, so the order below is stated as the judgement call it is:
  *
- *  1. TORPEDO — the only strictly-negative effect aimed at us, and the only one whose cost we
- *     can actually quantify (a -1 on the die chooseTorpedoTarget says we can least afford).
- *  2. DADO_D_ORO — doubles what they collect. Cancelling it is worth a whole pot, but only in
+ *  1. DADO_BRUMEGGIO — first on the Torpedo's own criteria, which it wins on every count:
+ *     strictly negative, aimed at us, certain, quantifiable — and far larger. A Torpedo is -1
+ *     on one die, once. The fog is about -0.97 expected value on EVERY die we roll (E 3.500
+ *     -> 2.528), and it applies again to every die we reroll. Lifting it also un-fogs the
+ *     reroll we are about to choose, which no other sponge target does.
+ *  2. TORPEDO — a strictly-negative effect aimed at us whose cost we can quantify (a -1 on the
+ *     die chooseTorpedoTarget says we can least afford).
+ *  3. DADO_D_ORO — doubles what they collect. Cancelling it is worth a whole pot, but only in
  *     the branch where they win, so it ranks below a certain loss.
- *  3. MULINELLO — priced with the same quantity chooseMulinello uses on our own behalf, so the
+ *  4. MULINELLO — priced with the same quantity chooseMulinello uses on our own behalf, so the
  *     bot never disagrees with itself about what an extra roll is worth.
- *  4. NERO_DI_SEPPIA — last because by now it has already cost us the reroll decision; the
+ *  5. NERO_DI_SEPPIA — last because by now it has already cost us the reroll decision; the
  *     sponge only buys back sight for the betting.
  *
  * Reads the FILTERED view like every other bot decision, so a die the bot cannot see cannot
@@ -267,8 +279,15 @@ function chooseSponge(state: GameState, player: PlayerId): AbilityId | null {
   return null
 }
 
-/** See chooseSponge for why this order, and why it is a ranking rather than a computation. */
-const SPONGE_PRIORITY: readonly AbilityId[] = [
+/**
+ * See chooseSponge for why this order, and why it is a ranking rather than a computation.
+ *
+ * A plain array, NOT a Record over AbilityId, so a new spongeable ability compiles fine while
+ * being silently un-sponged forever. Exported so a test can assert the list is complete —
+ * which is the only thing that turns that omission into a failure.
+ */
+export const SPONGE_PRIORITY: readonly AbilityId[] = [
+  'DADO_BRUMEGGIO',
   'DADO_TORPEDO',
   'DADO_D_ORO',
   'MULINELLO',
@@ -292,9 +311,11 @@ function holdsAbility(hand: GameState['hands'][PlayerId], ability: AbilityId): b
  * all 6 faces, and `handScore` prices standing pat. Both are the same metric the solver and
  * the reroll heuristic already use, so the bot cannot drift away from them.
  *
- * Two known limits, both inherited rather than introduced. `state` is the filtered view, so a
+ * Three known limits, all inherited rather than introduced. `state` is the filtered view, so a
  * Mulinello concealed by the human's Nero di Seppia is priced from its masked face — the same
- * blind spot chooseReroll has. And the EV ignores a pending Torpedo, exactly as noted above.
+ * blind spot chooseReroll has. The EV ignores a pending Torpedo, exactly as noted above. And a
+ * third roll taken in a Brumeggio's fog is priced as a clean d6 when it will actually average
+ * 2.53, so the bot takes the roll in some spots where keeping was better.
  */
 function chooseMulinello(state: GameState, player: PlayerId): Action {
   const h = state.hands[player]

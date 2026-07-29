@@ -8,16 +8,23 @@
 // when rolled*. Nothing here touches hand evaluation, betting or phase order, which keeps
 // hand.ts oblivious to the roguelike layer entirely.
 //
-// Six abilities need more than a face, so their spec below is a plain-d6 stub and the real
-// effect lives in the reducer, where the state it acts on exists:
+// Seven abilities need more than a face, so their spec below is a plain-d6 stub and the real
+// effect lives elsewhere, where the state it acts on exists:
 //   - NERO_DI_SEPPIA hides INFORMATION -> applyConcealment in game.ts
 //   - DADO_D_ORO moves COINS           -> goldenPayoutSource in game.ts
 //   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
 //   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
 //   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in game.ts
 //   - DADO_LANTERNA reveals INFORMATION   -> handleLanternPeek in game.ts
-// All six are named here so the pattern is discoverable from the registry. A new ability
+//   - DADO_BRUMEGGIO reshapes the OPPONENT'S ROLLS -> RollModifiers below + isFogged in game.ts
+// All seven are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
+//
+// DADO_BRUMEGGIO is the odd one out among those seven, and the reason the constraint above
+// says "a single die" rather than "its own die": its effect is applied HERE, inside
+// rollDieWithAbility, not in the reducer. It had nowhere else to go. A spec may only decide
+// its own face, and the reducer has no single moment to act on — every roll of the hand is
+// fogged. So the fog arrives as a RollModifiers argument, decided by the caller.
 
 import type { AbilityId, Die, DieValue } from './types'
 import type { Rng } from './rng'
@@ -70,6 +77,31 @@ export interface AbilitySpec {
   readonly resolve: (rolls: readonly DieValue[]) => DieValue
 }
 
+/**
+ * Roll-time conditions imposed on a die by something OTHER than its own ability.
+ *
+ * The third home for an ability's effect, after AbilitySpec.roll (which decides a face) and
+ * the reducer (which acts on state). It exists because DADO_BRUMEGGIO is the first ability
+ * that changes how the OPPONENT's dice are rolled, and neither of the other two homes can
+ * hold that: a spec may only decide its own die's face, and the reducer has no one moment to
+ * act on, since the first roll, both rerolls and a Mulinello's third roll are all affected.
+ *
+ * An object rather than a positional boolean, so a call site says WHAT it is imposing —
+ * `rollDieWithAbility(rng, ability, true)` reads as nothing at all — and so the next ability
+ * of this shape adds a field instead of another parameter.
+ */
+export interface RollModifiers {
+  /**
+   * The seat rolling this die is fogged: an opponent holds an active Dado Brumeggio, so the
+   * die rolls its ability TWICE and keeps the lower result. See rollDieWithAbility for the
+   * composition rule, which is the part worth reading before changing anything here.
+   */
+  readonly fogged?: boolean | undefined
+}
+
+/** No modifiers — a plain roll. The default, so every existing call site is unchanged. */
+export const NO_MODIFIERS: RollModifiers = {}
+
 /** Rolls `n` raw faces. */
 function rollFaces(rng: Rng, n: number): readonly DieValue[] {
   const faces: DieValue[] = []
@@ -84,6 +116,11 @@ function keepHighest(rolls: readonly DieValue[]): DieValue {
   return rolls.reduce<DieValue>((best, v) => (v > best ? v : best), 1)
 }
 
+/** Lowest of the rolled faces. Mirror of keepHighest; used by the fog, not by any spec. */
+function keepLowest(rolls: readonly DieValue[]): DieValue {
+  return rolls.reduce<DieValue>((worst, v) => (v < worst ? v : worst), 6)
+}
+
 /**
  * The ability registry. Every ability the game knows about lives here.
  *
@@ -94,7 +131,7 @@ function keepHighest(rolls: readonly DieValue[]): DieValue {
 export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
   STELLA_ESSICCATA: {
     id: 'STELLA_ESSICCATA',
-    name: 'Stella Essiccata',
+    name: 'Dado Stella Essiccata',
     description: 'Quando viene lanciato si divide in 3 dadi e tiene il valore più alto.',
     // Emoji, not a symbol glyph: the badge is 18px and one of seven, so it has to be
     // recognisable at a glance rather than merely distinct. A literal starfish beats an
@@ -107,7 +144,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
   },
   D4: {
     id: 'D4',
-    name: 'D4',
+    name: 'Dado D4',
     description: 'Dado a 4 facce: esce sempre un valore da 1 a 4.',
     // Reads as "capped", which is what a d4 does: it can never show a 5 or a 6. Chosen over a
     // triangle glyph (invisible next to six emoji) and over 🔻 (a warning sign, which oversells
@@ -124,7 +161,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
   },
   NERO_DI_SEPPIA: {
     id: 'NERO_DI_SEPPIA',
-    name: 'Nero di Seppia',
+    name: 'Dado Nero di Seppia',
     description:
       "Nasconde un dado dell'avversario fino allo showdown. Tra i dadi comuni acceca entrambi finché qualcuno non lo ruba.",
     icon: '🦑',
@@ -184,7 +221,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
   },
   MULINELLO: {
     id: 'MULINELLO',
-    name: 'Mulinello',
+    name: 'Dado Mulinello',
     description:
       'Oltre al rilancio normale, se il secondo risultato non ti piace puoi tirare questo dado una terza volta. Scegli dopo aver visto il risultato. Tra i comuni non fa nulla finché non lo rubi.',
     // A fishing reel has no emoji, so the rod stands in for it — nearest thing that reads as
@@ -210,7 +247,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'DADO_SPUGNA',
     name: 'Dado Spugna',
     description:
-      "Scegli un'abilità dell'avversario: per questa mano non ha effetto. Non funziona su Stella Essiccata e D4, che hanno già deciso la loro faccia, e non può assorbire un'altra Spugna. Tra i comuni non fa nulla finché non lo rubi.",
+      "Scegli un'abilità dell'avversario: per questa mano non ha effetto. Non funziona su Dado Stella Essiccata e Dado D4, che hanno già deciso la loro faccia, e non può assorbire un altro Dado Spugna. Tra i comuni non fa nulla finché non lo rubi.",
     // A sponge emoji exists and means exactly the ability: it soaks something up. Replaces a
     // bare hexagon outline, which meant nothing and nearly vanished at badge size.
     icon: '🧽',
@@ -227,7 +264,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
   },
   DADO_LANTERNA: {
     id: 'DADO_LANTERNA',
-    name: 'Lanterna',
+    name: 'Dado Lanterna',
     description:
       "Illumina il mazzo dell'avversario: quando vuoi, dai una sbirciata a tutti i suoi 12 dadi. Una volta per mano, e quando chiudi non li rivedi più. Tra i comuni non fa nulla finché non lo rubi.",
     icon: '🏮',
@@ -258,6 +295,52 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
   },
+  DADO_BRUMEGGIO: {
+    id: 'DADO_BRUMEGGIO',
+    name: 'Dado Brumeggio',
+    description:
+      "Annebbia l'avversario: ogni suo dado esce due volte e tiene il più basso, per tutta la mano. Tra i comuni non fa nulla finché non lo rubi.",
+    // A literal fog bank: horizontal grey bands, which nothing else in the badge set is.
+    // Chosen over 🌁 (an unreadable smudge of bridge at 18px, and it names a PLACE rather than
+    // a condition) and 💨 (reads as "fast", the opposite of what this does). Note it carries a
+    // variation selector, so icon.length is 3 — nothing counts characters, only concatenates.
+    icon: '🌫️',
+    // A malus, and like the DADO_TORPEDO the die it sits on is a plain d6: the malus is
+    // inflicted on the OPPONENT, not on this die. It must read violet, never gold.
+    kind: 'malus',
+    // Not ownOnly — and this is the one ability where the ownOnly doc above argues the other
+    // way, so the reasoning is worth spelling out.
+    //
+    // The fog is defined as "the OPPONENT's rolls", and a die sitting at the centre has no
+    // opponent. So unlike a Torpedo (whose random victim needs nobody to choose it, and which
+    // therefore stays live unowned) an unstolen Brumeggio has nothing to point at: it does
+    // NOTHING until somebody steals it. That is what makes it not-ownOnly rather than ownOnly
+    // — it must still be able to DROP among the commons and be stolen, exactly like the
+    // MULINELLO, the DADO_SPUGNA and the DADO_LANTERNA, and seatHolds counts a stolen die, so
+    // a thief gets a real ability rather than a dead one.
+    //
+    // The exception being made deliberately: this project's usual reasoning is "an effect that
+    // needs no chooser stays active unowned". The fog needs no chooser either — it is not a
+    // decision. It needs an OWNER, because "the opponent" is not a thing a common die has.
+    //
+    // Value-wise a plain d6. Its power is applied at ROLL TIME to somebody else's dice, which
+    // is a third home for an effect: not in `roll` below (a spec may only decide its own face)
+    // and not at one moment in the reducer (there is no one moment — every roll of the hand is
+    // fogged). See RollModifiers above and isFogged in game.ts.
+    //
+    // Spongeable by REVERSAL, like NERO_DI_SEPPIA and for the same reason: the fog is already
+    // on the first roll, long before a sponge target can be named in REROLL_SELECT, so the
+    // Spugna LIFTS it from that point on rather than preventing it. Dice already thrown are
+    // not re-rolled. Note the consequence for Rng, which is the opposite of the Torpedo's: a
+    // sponged fog consumes FEWER draws downstream, because here the draws ARE the dice, and
+    // there is no later stream to keep aligned.
+    spongeable: true,
+    // 1, not 2: diceRolled describes THIS ability, which rolls a plain d6 like the other five
+    // stubs. The doubling belongs to the fog and is applied to the VICTIM's dice, not here.
+    diceRolled: 1,
+    roll: (rng) => [rng.rollDie()],
+    resolve: (rolls) => rolls[0]!,
+  },
 }
 
 /** Whether a Dado Spugna is allowed to cancel `ability`. */
@@ -271,7 +354,7 @@ export function abilitySpec(ability: AbilityId | null | undefined): AbilitySpec 
 }
 
 /**
- * Rolls a single die, applying its ability if it has one.
+ * Rolls a single die, applying its ability if it has one, under any imposed `mods`.
  *
  * This is THE roll entry point for any die that belongs to a player: it keeps the
  * ability attached to the resulting Die (so a later reroll re-applies it) and records
@@ -280,21 +363,73 @@ export function abilitySpec(ability: AbilityId | null | undefined): AbilitySpec 
  * A plain die (no ability) records no `rolls` — it stays a bare `{ value }`, so nothing
  * downstream sees a behavioural change from this module existing.
  */
-export function rollDieWithAbility(rng: Rng, ability?: AbilityId | undefined): Die {
+export function rollDieWithAbility(
+  rng: Rng,
+  ability?: AbilityId | undefined,
+  mods: RollModifiers = NO_MODIFIERS,
+): Die {
   const spec = abilitySpec(ability)
-  if (spec === null) {
-    return { value: rng.rollDie() }
+
+  // The clear path is the ONLY path a die took before the Brumeggio existed, and it is still
+  // bit-for-bit what it was: one rng.rollDie() for a plain die, no `rolls` array, a bare
+  // { value }. Several things downstream key off that absence (maskDie in view.ts, dieStr's
+  // split, DieView's split), so it must stay exactly this shape.
+  if (mods.fogged !== true) {
+    if (spec === null) {
+      return { value: rng.rollDie() }
+    }
+    const rolls = spec.roll(rng)
+    return { value: spec.resolve(rolls), ability: spec.id, rolls }
   }
-  const rolls = spec.roll(rng)
-  return { value: spec.resolve(rolls), ability: spec.id, rolls }
+
+  // FOGGED. The composition rule, stated here because this is the only place in the codebase
+  // where two face-deciding rules meet: the die rolls its OWN ability TWICE, independently,
+  // and the fog keeps the lower of the two RESULTS. Not "pool every face and take the minimum".
+  //
+  // Why result-of-two rather than min-of-the-pool: each ability keeps its own identity. A
+  // fogged Stella still splits into 3 and keeps its max — twice — and the fog then picks the
+  // worse of those two, E = 4.356 against its clear 4.958. Pooling all six faces and taking
+  // the minimum would give 1.440, which is not "a Stella in fog", it is the fog eating the
+  // Stella whole. Same for the D4: two d4s, keep the lower, E = 1.875, and still never above
+  // 4. Every ability's rule survives the fog; the fog only chooses between two honest
+  // outcomes of it. (There is a test pinning exactly this difference.)
+  //
+  // FIXED DRAW COUNT: always exactly 2 * diceRolled faces, never "roll once and maybe again".
+  // A draw count that varied with the faces would shift the downstream stream and break
+  // seeded replay — the project's fixed-draw rule, see applyTorpedoes in game.ts.
+  if (spec === null) {
+    const rolls = [rng.rollDie(), rng.rollDie()] as const
+    // A fogged plain die DOES carry a `rolls` array, unlike a clear one: the split is the only
+    // way the UI and the log can show "rolled 5/2, kept 2", and a die rolled in fog is not an
+    // ordinary die however plain the physical die is.
+    return { value: keepLowest(rolls), rolls }
+  }
+  const first = spec.roll(rng)
+  const second = spec.roll(rng)
+  const a = spec.resolve(first)
+  const b = spec.resolve(second)
+  return {
+    value: a <= b ? a : b,
+    ability: spec.id,
+    // BOTH attempts, concatenated, so the log and the UI show every face the fog produced.
+    // Note this is 2 * spec.diceRolled entries on a die whose spec says diceRolled: 1. That
+    // is correct and must not be "fixed": diceRolled describes the ABILITY, and the fog is
+    // not the ability. Nothing compares rolls.length to diceRolled outside the registry
+    // self-consistency test, which calls spec.roll() directly and never reaches this path.
+    rolls: [...first, ...second],
+  }
 }
 
 /**
  * Rerolls a die in place, preserving its ability.
  * Used by the reroll step, where the physical die (and thus its ability) is kept.
+ *
+ * The fog is NOT carried on the Die — it is a property of the seat, re-derived at each roll.
+ * That is what makes a sponged fog lift cleanly: a die rerolled after the sponge comes back
+ * clear, with no per-die state anywhere to clear.
  */
-export function rerollDie(rng: Rng, die: Die): Die {
-  return rollDieWithAbility(rng, die.ability)
+export function rerollDie(rng: Rng, die: Die, mods: RollModifiers = NO_MODIFIERS): Die {
+  return rollDieWithAbility(rng, die.ability, mods)
 }
 
 /** All ability ids, in registry order. Handy for UI pickers and simulations. */

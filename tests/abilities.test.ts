@@ -645,14 +645,28 @@ describe('random ability drops', () => {
     expect(rateOf(last)).toBeLessThan(rateOf(first))
     // Nobody is starved outright — the effect is a bias, not an exclusion.
     //
-    // HEADS UP if you are adding the 9th ability: this floor is close. Measured rate of the
-    // LAST registry entry, 400k trials against an independent model of drawAbilitySlots:
-    //   7 abilities -> 0.309
-    //   8 abilities -> 0.280   (where we are now)
-    //   9 abilities -> 0.246   <- below this floor, this test FAILS
-    // The fix then is not a looser floor: it is more slots, a lower ownChance, or accepting
-    // that a 9-ability pool cannot deliver ownChance to everyone and saying so here.
-    expect(rateOf(last)).toBeGreaterThan(0.25)
+    // Measured rate of the LAST registry entry, 400k trials against an independent model of
+    // drawAbilitySlots (seed 31):
+    //   7 abilities -> 0.309   (ratio to head 0.883)
+    //   8 abilities -> 0.280   (ratio 0.802)
+    //   9 abilities -> 0.247   (ratio 0.702)  <- where we are now, with DADO_BRUMEGGIO
+    //  10 abilities -> 0.213   (ratio 0.608)  <- below this bound, this test FAILS
+    //
+    // The absolute 0.25 floor this assertion used to carry is gone, and deliberately: at 9
+    // abilities the 4 slots genuinely CANNOT deliver ownChance to everyone, which is the
+    // "accept it and say so here" that the old comment offered as the honest third option.
+    // (The other two do not help: more slots would mean more than 4 own dice, and a lower
+    // ownChance makes the absolute rate WORSE — 0.241 at chance 0.30.)
+    //
+    // So the invariant is now the RATIO rather than the rate: the tail keeps most of what
+    // the head gets. Still a bias, still not an exclusion.
+    //
+    // HEADS UP if you are adding the 10th ability: the headroom here is ONE ability, exactly
+    // as tight as the floor it replaced. The ratio decays ~0.09 per ability and this bound is
+    // 0.65. At that point the honest move is no longer to restate the bound — the drop model
+    // itself is the thing that has run out, and pushing the tail below ~60% of the head means
+    // "at most one of each in 4 slots" is no longer a fair way to hand out ten abilities.
+    expect(rateOf(last)).toBeGreaterThan(rateOf(first) * 0.65)
   })
 
   it('spreads a special across all 4 slots, roughly uniformly', () => {
@@ -2109,6 +2123,406 @@ describe('DADO_LANTERNA: one peek at the opponent deck, once per hand', () => {
     const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.DADO_LANTERNA.icon)
+  })
+})
+
+describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
+  const BRUMEGGIO_ONLY: Loadout = ['DADO_BRUMEGGIO', null, null, null]
+  const COMMON_BRUMEGGIO = {
+    abilityDrops: {
+      ownChance: 0,
+      commonChance: 1,
+      pool: ['DADO_BRUMEGGIO'] as readonly AbilityId[],
+    },
+  }
+  const FOGGED = { fogged: true }
+
+  /** Whether this die was rolled in fog: two faces, and the lower one kept. */
+  function looksFogged(die: { value: DieValue; rolls?: readonly DieValue[] | undefined }): boolean {
+    return die.rolls !== undefined && die.rolls.length === 2 && die.value === Math.min(...die.rolls)
+  }
+
+  /** Counts EVERY draw, rollDie included — the fog spends its entropy there. */
+  function countingRng(seed: number): { rng: ReturnType<typeof createRng>; draws: () => number } {
+    const inner = createRng(seed)
+    let n = 0
+    return {
+      rng: {
+        next: () => {
+          n++
+          return inner.next()
+        },
+        nextInt: (min, max) => {
+          n++
+          return inner.nextInt(min, max)
+        },
+        rollDie: () => {
+          n++
+          return inner.rollDie()
+        },
+      },
+      draws: () => n,
+    }
+  }
+
+  // --- the roll itself ---
+
+  it('rolls two faces and keeps the lowest', () => {
+    const rng = createRng(901)
+    for (let i = 0; i < 2000; i++) {
+      const die = rollDieWithAbility(rng, undefined, FOGGED)
+      expect(die.rolls).toHaveLength(2)
+      expect(die.value).toBe(Math.min(...die.rolls!))
+    }
+  })
+
+  it('drops the expected value to min-of-two, and all but kills the 6', () => {
+    // Exact figures, by enumerating all 36 pairs: E = 91/36 = 2.5278, P(6) = 1/36 = 0.0278.
+    // Against a clear d6's 3.5 and 0.1667 — the whole point of the ability.
+    const rng = createRng(902)
+    const trials = 60_000
+    let sum = 0
+    let sixes = 0
+    for (let i = 0; i < trials; i++) {
+      const { value } = rollDieWithAbility(rng, undefined, FOGGED)
+      sum += value
+      if (value === 6) {
+        sixes++
+      }
+    }
+    expect(sum / trials).toBeGreaterThan(2.45)
+    expect(sum / trials).toBeLessThan(2.61)
+    expect(sixes / trials).toBeLessThan(0.05)
+    expect(sixes / trials).toBeGreaterThan(0.01)
+  })
+
+  it('leaves an unfogged roll bit-for-bit what it always was', () => {
+    // The regression guard for the whole change: every way of saying "no fog" must produce the
+    // bare { value } a plain die has always been, with no `rolls` for anything to key off.
+    for (const mods of [undefined, {}, { fogged: false }, { fogged: undefined }]) {
+      const die = rollDieWithAbility(createRng(903), undefined, mods)
+      expect(die.rolls).toBeUndefined()
+      expect(die.ability).toBeUndefined()
+      expect(die).toEqual({ value: createRng(903).rollDie() })
+    }
+    // And the same seed through rollOwnDice gives identical dice with or without an empty mods.
+    expect(rollOwnDice(createRng(904))).toEqual(rollOwnDice(createRng(904), undefined, {}))
+  })
+
+  // --- composition with the two face-deciding abilities ---
+
+  it('rolls a D4 twice and keeps the lower, still never above 4', () => {
+    // Exact E = 1.875 (min of two d4).
+    const rng = createRng(905)
+    const trials = 60_000
+    let sum = 0
+    for (let i = 0; i < trials; i++) {
+      const die = rollDieWithAbility(rng, 'D4', FOGGED)
+      expect(die.rolls).toHaveLength(2)
+      expect(die.value).toBeLessThanOrEqual(4)
+      expect(die.value).toBe(Math.min(...die.rolls!))
+      sum += die.value
+    }
+    expect(sum / trials).toBeGreaterThan(1.8)
+    expect(sum / trials).toBeLessThan(1.95)
+  })
+
+  it('rolls a Stella TWICE and keeps the worse max — it does not pool the six faces', () => {
+    // THE composition test. A fogged Stella rolls its own 3-and-keep-highest twice, and the fog
+    // picks the lower of those two results: E = 4.356, against its clear 4.958. The tempting
+    // implementation — pool all six faces and take the minimum — gives 1.440, which is not a
+    // Stella in fog, it is the fog eating the Stella whole. This test is what tells them apart.
+    const rng = createRng(906)
+    const trials = 20_000
+    let sum = 0
+    for (let i = 0; i < trials; i++) {
+      const die = rollDieWithAbility(rng, 'STELLA_ESSICCATA', FOGGED)
+      expect(die.rolls).toHaveLength(6)
+      const r = die.rolls!
+      const firstAttempt = Math.max(r[0]!, r[1]!, r[2]!)
+      const secondAttempt = Math.max(r[3]!, r[4]!, r[5]!)
+      expect(die.value).toBe(Math.min(firstAttempt, secondAttempt))
+      sum += die.value
+    }
+    expect(sum / trials).toBeGreaterThan(4.25)
+    expect(sum / trials).toBeLessThan(4.46)
+    // Nails the difference numerically too: pooling would land near 1.44, nowhere near this.
+    expect(sum / trials).toBeGreaterThan(3)
+  })
+
+  it('consumes a FIXED number of draws, whatever the faces', () => {
+    // The project's fixed-draw rule: 2 * diceRolled every time, never "roll once and maybe
+    // again". A count that varied with the outcome would shift the stream and break replay.
+    for (const [ability, expected] of [
+      [undefined, 2],
+      ['D4', 2],
+      ['DADO_BRUMEGGIO', 2],
+      ['STELLA_ESSICCATA', 6],
+    ] as const) {
+      for (const seed of [907, 908, 909]) {
+        const { rng, draws } = countingRng(seed)
+        rollDieWithAbility(rng, ability, FOGGED)
+        expect(draws()).toBe(expected)
+      }
+    }
+  })
+
+  // --- in a real hand ---
+
+  it('fogs the opponent from the very FIRST roll, and never its own holder', () => {
+    const rng = createRng(910)
+    const s = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
+    for (const die of s.hands.human.own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+    // The seat casting the fog rolls clear: three plain dice plus the Brumeggio's own d6.
+    for (const die of s.hands.bot.own!) {
+      expect(looksFogged(die)).toBe(false)
+    }
+  })
+
+  it('reads the LOADOUT on the first roll, so a deck-mode seat is fogged too', () => {
+    // The guard against deriving the first roll from seatHoldsActive: at that instant the hands
+    // do not exist yet, and state.loadouts still holds the previous hand's.
+    const rng = createRng(911)
+    const s = playToSteal(
+      createInitialState({ decks: { bot: buildDeck(['DADO_BRUMEGGIO']) } }),
+      rng,
+    )
+    const botHasIt = s.hands.bot.own!.some((d) => d.ability === 'DADO_BRUMEGGIO')
+    expect(botHasIt).toBe(true)
+    for (const die of s.hands.human.own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+  })
+
+  it('fogs the rerolls as well as the first roll', () => {
+    const rng = createRng(912)
+    let s = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
+    s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
+    for (const die of s.hands.human.own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+  })
+
+  it('fogs its victim once it is STOLEN from the commons', () => {
+    // Pins that seatHoldsActive counts a stolen die: the thief's opponent starts rolling in fog
+    // from the reroll onward, even though nobody owned it at the first roll.
+    const rng = createRng(913)
+    let s = playToSteal(createInitialState(COMMON_BRUMEGGIO), rng)
+    const index = s.common!.findIndex((d) => d.ability === 'DADO_BRUMEGGIO')
+    expect(index).toBeGreaterThanOrEqual(0)
+
+    // Nobody held it for the first roll, so both seats rolled clear.
+    for (const seat of ['human', 'bot'] as const) {
+      for (const die of s.hands[seat].own!) {
+        expect(looksFogged(die)).toBe(false)
+      }
+    }
+
+    const thief = s.primary
+    const victim = other(thief)
+    s = reducer(s, { type: 'STEAL', player: thief, commonIndex: index }, rng)
+    s = reducer(s, { type: 'STEAL', player: victim, commonIndex: index === 0 ? 1 : 0 }, rng)
+    s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
+    s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
+
+    for (const die of s.hands[victim].own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+    for (const die of s.hands[thief].own!) {
+      expect(looksFogged(die)).toBe(false)
+    }
+  })
+
+  it('does nothing at all while it sits unstolen among the commons', () => {
+    // Unlike a Torpedo, an unowned fog has no target: "the opponent" is not a thing a die at
+    // the centre has. Both seats roll and reroll clear.
+    const rng = createRng(914)
+    let s = playToSteal(createInitialState(COMMON_BRUMEGGIO), rng)
+    const index = s.common!.findIndex((d) => d.ability === 'DADO_BRUMEGGIO')
+    const others = [0, 1, 2].filter((i) => i !== index)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: others[1]! }, rng)
+    s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
+    s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
+    for (const seat of ['human', 'bot'] as const) {
+      for (const die of s.hands[seat].own!) {
+        expect(looksFogged(die)).toBe(false)
+      }
+    }
+  })
+
+  // --- the Spugna, in both directions ---
+
+  /** Both seats steal, then `player` names `target` with their Spugna. */
+  function spongeIt(
+    start: ReturnType<typeof createInitialState>,
+    rng: ReturnType<typeof createRng>,
+    player: 'human' | 'bot',
+    target: AbilityId,
+    indices: readonly number[] = [0, 1, 2, 3],
+  ): ReturnType<typeof createInitialState> {
+    const np = other(start.primary)
+    let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    for (const seat of [s.primary, np] as const) {
+      const base = rerollAction(s, seat, indices)
+      s = reducer(s, seat === player ? { ...base, spongeTarget: target } : base, rng)
+    }
+    return s
+  }
+
+  it('is lifted by a Spugna from the reroll on — a reversal, not a prevention', () => {
+    const rng = createRng(915)
+    const start = playToSteal(
+      createInitialState({
+        loadouts: { human: ['DADO_SPUGNA', null, null, null], bot: BRUMEGGIO_ONLY },
+      }),
+      rng,
+    )
+    // The first roll is ALREADY fogged: it happened two phases before a sponge target could be
+    // named. Same shape as the Nero di Seppia, which the Spugna also reverses rather than stops.
+    for (const die of start.hands.human.own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+
+    const s = spongeIt(start, rng, 'human', 'DADO_BRUMEGGIO')
+    // ...and every die thrown after the sponge comes back clear.
+    for (const die of s.hands.human.own!) {
+      expect(looksFogged(die)).toBe(false)
+    }
+    expect(s.log.some((l) => /Dado Spugna su Dado Brumeggio/.test(l))).toBe(true)
+  })
+
+  it('cannot be sponged by its own holder to protect the victim', () => {
+    // The direction regression hasSponged's doc warns about: the sponge must protect the seat
+    // that CAST it, not the ability's owner. A bot sponging its own Brumeggio changes nothing
+    // for the human, who stays fogged.
+    const rng = createRng(916)
+    const start = playToSteal(
+      createInitialState({
+        loadouts: { human: [null, null, null, null], bot: ['DADO_BRUMEGGIO', 'DADO_SPUGNA', null, null] },
+      }),
+      rng,
+    )
+    const s = spongeIt(start, rng, 'bot', 'DADO_BRUMEGGIO')
+    for (const die of s.hands.human.own!) {
+      expect(looksFogged(die)).toBe(true)
+    }
+  })
+
+  it("gives a sponged seat a CLEAR Mulinello third roll", () => {
+    const rng = createRng(917)
+    const start = playToSteal(
+      createInitialState({
+        loadouts: { human: ['DADO_SPUGNA', 'MULINELLO', null, null], bot: BRUMEGGIO_ONLY },
+      }),
+      rng,
+    )
+    // Reroll nothing, so the only die thrown after the sponge is the Mulinello's third roll.
+    let s = spongeIt(start, rng, 'human', 'DADO_BRUMEGGIO', [])
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    while (s.phase === 'MULINELLO_SELECT') {
+      s =
+        s.toAct === 'human'
+          ? reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+          : reducer(s, { type: 'MULINELLO_PASS', player: s.toAct }, rng)
+    }
+    const mulinello = s.hands.human.own!.find((d) => d.ability === 'MULINELLO')!
+    expect(mulinello.rolls).toHaveLength(1)
+  })
+
+  it('fogs the Mulinello third roll when it is NOT sponged', () => {
+    const rng = createRng(918)
+    let s = playToSteal(
+      createInitialState({
+        loadouts: { human: ['MULINELLO', null, null, null], bot: BRUMEGGIO_ONLY },
+      }),
+      rng,
+    )
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, other(s.primary), []), rng)
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    while (s.phase === 'MULINELLO_SELECT') {
+      s =
+        s.toAct === 'human'
+          ? reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
+          : reducer(s, { type: 'MULINELLO_PASS', player: s.toAct }, rng)
+    }
+    const mulinello = s.hands.human.own!.find((d) => d.ability === 'MULINELLO')!
+    expect(looksFogged(mulinello)).toBe(true)
+  })
+
+  // --- boundaries, spec flags, and the record ---
+
+  it('never fogs the common dice, which belong to nobody when they are rolled', () => {
+    const rng = createRng(919)
+    const s = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
+    for (const die of s.common!) {
+      expect(looksFogged(die)).toBe(false)
+    }
+  })
+
+  it('is spongeable, and not ownOnly', () => {
+    expect(ABILITIES.DADO_BRUMEGGIO.spongeable).toBe(true)
+    expect(ABILITIES.DADO_BRUMEGGIO.ownOnly).not.toBe(true)
+  })
+
+  it('is deterministic: same seed and actions give the same hands and log', () => {
+    const run = (): ReturnType<typeof createInitialState> => {
+      const rng = createRng(920)
+      const start = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
+      return playHandToCompletion(start, rng)
+    }
+    const a = run()
+    const b = run()
+    expect(a.log).toEqual(b.log)
+    expect(a.hands.human.own).toEqual(b.hands.human.own)
+  })
+
+  it('announces the fog, and prints the doubled faces of even a PLAIN die', () => {
+    // The split on a plain die is the regression guard for dieStr's gate: a fogged plain die has
+    // two faces and no ability of its own, and "2 (5/2)" is what makes the fog read as a rule.
+    const rng = createRng(921)
+    const s = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
+    const fogLine = s.log.find((l) => /lancia il Brumeggio/.test(l))!
+    expect(fogLine).toBeDefined()
+    expect(fogLine).toContain('più basso')
+
+    const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
+    expect(rollLine).toContain(ABILITIES.DADO_BRUMEGGIO.icon)
+    // "Tu: 2 (5/2), ..." — a bare number followed by its two faces, no icon in front.
+    expect(rollLine).toMatch(/\d \(\d\/\d\)/)
+
+    // The fog line comes BEFORE the dice it explains.
+    expect(s.log.indexOf(fogLine)).toBeLessThan(s.log.indexOf(rollLine))
+  })
+
+  it('costs the victim draws, and a sponged fog costs FEWER — the opposite of a Torpedo', () => {
+    // A deliberate asymmetry, and the one place this ability departs from the fixed-draw rule's
+    // usual shape. A Torpedo's draws happen at the showdown AFTER the sponge is known, so it
+    // must spend them either way to keep the stream aligned. The fog's draws ARE the dice, so
+    // there is no later stream to protect: lifting the fog simply means fewer dice thrown.
+    const draws = (sponge: boolean): number => {
+      const { rng, draws: count } = countingRng(922)
+      const start = playToSteal(
+        createInitialState({
+          loadouts: { human: ['DADO_SPUGNA', null, null, null], bot: BRUMEGGIO_ONLY },
+        }),
+        rng,
+      )
+      const before = count()
+      spongeIt(start, rng, 'human', sponge ? 'DADO_BRUMEGGIO' : 'DADO_TORPEDO')
+      return count() - before
+    }
+    // Sponging the fog means the human's 4 rerolled dice cost 1 draw each instead of 2.
+    expect(draws(true)).toBe(draws(false) - 4)
   })
 })
 

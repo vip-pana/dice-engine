@@ -118,19 +118,35 @@ mostra nome, icona e regola.
 | ⚡ Dado Torpedo | Un dado scelto dell'avversario perde 1 allo showdown; 10% il campo si elettrizza e un tuo dado **a caso** perde 1 | Colpisce **entrambi** a caso |
 | 🎣 Mulinello | Un terzo tiro **opzionale** di quel dado, deciso dopo aver visto il rilancio | **Non fa nulla** finché non lo rubi |
 | 🧽 Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
-| 🏮 Lanterna | Una **sbirciata** al mazzo intero del Bot, quando vuoi. Una volta per mano | **Non fa nulla** finché non lo rubi |
+| 🏮 Dado Lanterna | Una **sbirciata** al mazzo intero del Bot, quando vuoi. Una volta per mano | **Non fa nulla** finché non lo rubi |
+| 🌫️ Dado Brumeggio | Ogni dado dell'avversario esce **due volte** e tiene il **più basso**, per tutta la mano: è un **malus** che infliggi | **Non fa nulla** finché non lo rubi |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
 Il Torpedo colpisce **dopo** il terzo tiro, quindi il Mulinello non può annullare
 il -1.
 
+#### Quanto pesa il Brumeggio
+
+Tenere il più basso di due tiri non è un ritocco: è il malus più grosso del gioco.
+
+| | dado normale | in nebbia |
+| --- | --- | --- |
+| valore medio | 3,50 | **2,53** |
+| probabilità di un 6 | 16,7% | **2,8%** |
+
+E colpisce **ogni** dado che l'avversario tira — primo lancio, rilanci e terzo tiro
+del Mulinello — non uno solo come il Torpedo. Ogni abilità però conserva la propria
+regola: una Stella Essiccata in nebbia tira i suoi 3 dadi **due volte** e la nebbia
+tiene il peggiore dei due risultati (media 4,36 invece di 4,96), non il minimo delle
+sei facce. Un D4 in nebbia resta un D4, media 1,88.
+
 #### Cosa può assorbire la Spugna
 
 Scegli il bersaglio durante la **scelta rilancio** (passo 4), assieme ai dadi da
 rilanciare. È facoltativo: puoi non spugnare niente.
 
-Funziona su **Torpedo, Dado d'Oro, Mulinello e Nero di Seppia**. Non funziona su
+Funziona su **Torpedo, Dado d'Oro, Mulinello, Nero di Seppia e Brumeggio**. Non funziona su
 **Stella Essiccata e D4**: quelle due decidono la loro faccia *nel momento in cui
 il dado viene lanciato*, e a quel punto le facce scartate non esistono più — non
 c'è niente da annullare. Non funziona nemmeno sulla **🏮 Lanterna**, ma per un
@@ -148,6 +164,13 @@ primario agisce per primo, quindi rivede i suoi dadi **prima** di scegliere il
 rilancio; il non-primario invia le due scelte insieme, quindi recupera la vista
 solo per la seconda scommessa. Il primario ne ricava di più — coerente col
 vantaggio che ha già altrove, ma è bene saperlo.
+
+Il **Brumeggio** è il secondo caso di questo tipo, per lo stesso motivo: la nebbia è
+già sul **primo lancio**, molto prima che tu possa nominare un bersaglio. Quindi la
+Spugna non la previene, la **dirada**: i dadi già in tavola restano quelli che sono,
+ma dal rilancio in poi — terzo tiro del Mulinello compreso — torni a tirare pulito.
+Conviene quindi abbinarla a un rilancio ampio: è l'unico bersaglio della Spugna che
+migliora i dadi che stai per tirare, e non solo quelli che hai già in mano.
 
 #### Cosa illumina la Lanterna
 
@@ -214,10 +237,19 @@ Peggio, la Spugna annulla proprio le abilità che l'harness già non sa modellar
 Metterle in tabella con un 49,9% significherebbe presentare come misura un
 artefatto del simulatore.
 
+**Il Brumeggio è il caso più netto di tutti**, e vale la pena dirlo perché è l'unico
+la cui meccanica è *interamente* misurabile e che il simulatore comunque non misura.
+La nebbia è per definizione qualcosa che **l'altro** posto ti impone, e
+`playHeuristicHand` gioca un posto solo: le due mani si tirano indipendenti, quindi
+la nebbia di A non raggiunge mai i dadi di B. Il simulatore lo riporterà a ~50%, come
+i tre con l'asterisco. Non è un difetto dell'abilità: è il limite di un modello a un
+posto. Il suo effetto sul singolo dado, quello sì, è calcolabile esattamente — è la
+tabella nella sezione del Brumeggio sopra (3,50 → 2,53).
+
 Renderlo misurabile vuol dire un simulatore a **due posti** (contesa sul furto,
 interazione dei rilanci, modello di scommessa) o pilotare il reducer vero dal sim:
-un lavoro separato e grosso. Finché non esiste, il Dado Spugna e i tre con
-l'asterisco **si bilanciano a giudizio, non a numeri** — e questo README lo dice
+un lavoro separato e grosso. Finché non esiste, il Dado Spugna, il Brumeggio e i tre
+con l'asterisco **si bilanciano a giudizio, non a numeri** — e questo README lo dice
 invece di far finta di avere i dati.
 
 Le due abilità che il simulatore misura davvero sono quindi il Mulinello e la
