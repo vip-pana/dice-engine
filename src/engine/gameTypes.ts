@@ -113,6 +113,24 @@ export interface PlayerHandState {
    */
   readonly mulinelloUsed: boolean
   /**
+   * Whether this seat has already spent its Lanterna's peek at the opponent's deck this hand.
+   *
+   * Same reasoning as mulinelloUsed: one shot, sent as an action, so "already used" has to be
+   * state. Reset every hand by emptyHandState, which is what makes holding a lantern next hand
+   * grant a fresh look.
+   *
+   * What was SEEN is deliberately not stored. The peek is a glance, not a note: it shows
+   * `decks[opponent]`, which is already on the state and immutable for the match, so a snapshot
+   * would just duplicate it — and keeping one would make the glance permanent, which is exactly
+   * what this ability is not.
+   *
+   * Honest about what this does NOT do: it is a PERMISSION, not a barrier. `viewFor` masks
+   * `hands[seat].own` and never `decks`, so a client could render the opponent's deck without
+   * ever sending the action. Closing that would mean masking `decks` per viewer, which the
+   * reducer cannot have — it reads `decks[seat]` as the thing it draws hands FROM.
+   */
+  readonly lanternaUsed: boolean
+  /**
    * Own-dice indices THIS player cannot see, because the opponent rolled a Nero di Seppia.
    *
    * Concealment is about knowledge, not value: a hidden die still counts in full at the
@@ -187,26 +205,6 @@ export interface GameState {
    * and optional-vs-undefined gets fiddly across the record.
    */
   readonly decks: Readonly<Record<PlayerId, Deck | null>>
-
-  /**
-   * Which of the OPPONENT's deck specials each seat has learned, keyed by the OBSERVER.
-   *
-   * `revealedDeckSpecials.human` is what the human knows about `decks.bot`. Filled by a Dado
-   * Lanterna at deal time (see applyLanternReveal in game.ts), in registry order so the array
-   * is canonical however it was accumulated.
-   *
-   * MATCH-LONG, not per-hand, which is why it lives here rather than on PlayerHandState — that
-   * one is wiped by emptyHandState every hand. A deck is fixed for the whole match, so
-   * un-showing what the player has already read would not un-know it; it would just look like
-   * a bug. Note it survives `handleNextHand` BY OMISSION: that function spreads `...state` and
-   * resets an explicit list of fields, and this is deliberately not on it — same as `score`
-   * and `bankroll`. There is a test pinning that, because preservation-by-omission is
-   * invisible at the reset site.
-   *
-   * "Lit right now" is NOT stored: it is `seatHolds(state, seat, 'DADO_LANTERNA')`. A second
-   * field could drift out of sync with this one.
-   */
-  readonly revealedDeckSpecials: Readonly<Record<PlayerId, readonly AbilityId[]>>
 
   /**
    * Seats whose loadout was supplied explicitly at match creation. Those are never

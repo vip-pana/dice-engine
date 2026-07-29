@@ -140,6 +140,13 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
 
   // Switch on the already-narrowed `state.phase` (ROLL_OFF/HAND_COMPLETE returned above),
   // but pass `seen` to every handler.
+  //
+  // Note what is NOT here: the bot never sends LANTERNA_PEEK. Nothing below reads
+  // `state.decks`, so knowing the human's deck would feed no decision — and a peek dispatched
+  // for appearances would be worse than its absence, implying the bot had weighed it. The
+  // machine never waits for one either: a peek changes neither `phase` nor `toAct`, so no
+  // phase can stall on an action the bot declines to send. A Lanterna in the bot's deck is
+  // therefore dead weight for the bot, which is a real and accepted asymmetry.
   switch (state.phase) {
     case 'INITIAL_BET':
       return chooseInitialBet(seen, player)

@@ -15,7 +15,7 @@
 //   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
 //   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
 //   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in game.ts
-//   - DADO_LANTERNA reveals INFORMATION   -> applyLanternReveal in game.ts
+//   - DADO_LANTERNA reveals INFORMATION   -> handleLanternPeek in game.ts
 // All six are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
 
@@ -229,21 +229,31 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     id: 'DADO_LANTERNA',
     name: 'Lanterna',
     description:
-      "Illumina il mazzo dell'avversario: vedi quali dadi speciali contiene. Si accende da sola nella mano in cui lo peschi, e quello che hai visto resta annotato. Tra i comuni non fa nulla finché non lo rubi.",
+      "Illumina il mazzo dell'avversario: quando vuoi, dai una sbirciata a tutti i suoi 12 dadi. Una volta per mano, e quando chiudi non li rivedi più. Tra i comuni non fa nulla finché non lo rubi.",
     icon: '🏮',
     kind: 'buff',
-    // Not ownOnly: the reveal needs an observer, and stealing one supplies exactly that —
+    // Not ownOnly: the peek needs an observer, and stealing one supplies exactly that —
     // seatHolds counts a stolen die. Unclaimed among the commons it lights for nobody, the
     // same honest outcome as the MULINELLO.
     //
-    // NOT spongeable, and for a different reason than STELLA_ESSICCATA and D4. Those two have
-    // already committed their face; this one has already delivered its INFORMATION. A Spugna
-    // is aimed during REROLL_SELECT, by which point the player has read the panel — cancelling
-    // it could only blank a list they already know, which is a fiction, not a rule.
+    // NOT spongeable, and NOT for the reason an earlier version of this comment gave. It is
+    // not that "the information is already out" — the peek is player-triggered, so it may well
+    // not have been taken when a Spugna is aimed in REROLL_SELECT. The real reason is that
+    // cancelling it would resolve by WHEN THE PLAYER CLICKED: a peek taken in STEAL is already
+    // spent and untouchable, one saved for SECOND_BET is not, and REROLL_SELECT is sequential
+    // so the primary would sponge before the non-primary had the chance. "Your Spugna cancels
+    // their Lanterna if and only if they hadn't got round to it" is not a rule anyone can play
+    // to. DADO_SPUGNA is itself non-spongeable to avoid a race decided by seat order; a race
+    // decided by click timing is strictly worse.
     //
-    // Value-wise a plain d6. Its power is knowledge, applied at deal time by the reducer (see
-    // applyLanternReveal in game.ts) — and it is the only ability that consumes NO Rng, since
-    // nothing about it is chosen.
+    // The structural difference: the other four spongeable abilities each fire at ONE moment
+    // the reducer picks (Torpedo at the showdown, d'Oro at payout, Mulinello in its phase,
+    // Seppia on the deal). This is the first whose moment the PLAYER picks, and that is what
+    // makes it un-spongeable as a rule rather than as an accident.
+    //
+    // Value-wise a plain d6. Its power is knowledge, spent by the player (see handleLanternPeek
+    // in game.ts) — and it is the only ability that consumes NO Rng, since nothing about it is
+    // rolled or chosen.
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,

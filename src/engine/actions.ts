@@ -91,6 +91,22 @@ export type MulinelloAction =
   /** Keep the current face and pass the turn. */
   | { readonly type: 'MULINELLO_PASS'; readonly player: PlayerId }
 
+/**
+ * Take a Dado Lanterna's one look at the opponent's deck. Valid from STEAL to SECOND_BET.
+ *
+ * THE ONLY ACTION IN THIS REDUCER THAT IS NOT A MOVE. It does not read `toAct`, does not write
+ * it, and does not advance `phase` — it flips one flag and writes one log line. Every other
+ * player action here asserts `toAct === player`; this one must NOT, or the button would be dead
+ * for most of the hand: STEAL, REROLL_SELECT and MULINELLO_SELECT are all sequential, and a
+ * player has to be able to peek while waiting for the opponent to act.
+ *
+ * If you are adding an action and copying a handler as a template, copy handleSteal, not this.
+ */
+export interface LanternPeekAction {
+  readonly type: 'LANTERNA_PEEK'
+  readonly player: PlayerId
+}
+
 /** Advance from HAND_COMPLETE to the next hand (or reveal MATCH_OVER). */
 export interface NextHandAction {
   readonly type: 'NEXT_HAND'
@@ -106,5 +122,6 @@ export type Action =
   | StealAction
   | RerollAction
   | MulinelloAction
+  | LanternPeekAction
   | NextHandAction
   | RollOffAction

@@ -6,7 +6,7 @@
 // send legal actions; tests assert the guards).
 
 import { evaluateHand, compareHands } from './hand'
-import { ALL_ABILITY_IDS, abilitySpec, isSpongeable, rerollDie } from './abilities'
+import { abilitySpec, isSpongeable, rerollDie } from './abilities'
 import {
   rollOwnDice,
   rollCommonDice,
@@ -18,7 +18,7 @@ import {
   type Loadout,
   type OwnDice,
 } from './strategy'
-import { assertValidDeck, deckSpecials, drawHandFromDeck, type Deck } from './deck'
+import { assertValidDeck, drawHandFromDeck, type Deck } from './deck'
 import type { Rng } from './rng'
 import type { AbilityId, Die, DieValue, Hand } from './types'
 import type { Action } from './actions'
@@ -50,6 +50,7 @@ function emptyHandState(): PlayerHandState {
     torpedoTarget: null,
     mulinelloUsed: false,
     spongeTarget: null,
+    lanternaUsed: false,
   }
 }
 
@@ -133,8 +134,6 @@ export function createInitialState(options: NewGameOptions = {}): GameState {
     },
     ownDiceSource,
     decks,
-    // Nobody has lit a lantern yet. Not in emptyHandState: this outlives the hand.
-    revealedDeckSpecials: { human: [], bot: [] },
     pinnedLoadouts: {
       human: ownDiceSource.human.kind === 'pinned',
       bot: ownDiceSource.bot.kind === 'pinned',
@@ -283,6 +282,8 @@ export function reducer(state: GameState, action: Action, rng: Rng): GameState {
       return handleMulinello(state, action.player, true, rng)
     case 'MULINELLO_PASS':
       return handleMulinello(state, action.player, false, rng)
+    case 'LANTERNA_PEEK':
+      return handleLanternPeek(state, action.player)
     case 'NEXT_HAND':
       return handleNextHand(state)
   }
@@ -331,6 +332,31 @@ function handleRollOff(state: GameState, rng: Rng): GameState {
 
 function inBettingPhase(state: GameState): boolean {
   return state.phase === 'INITIAL_BET' || state.phase === 'SECOND_BET'
+}
+
+/**
+ * Whether a Dado Lanterna could be used to peek right now — "from the deal to the showdown".
+ *
+ * Exported because the UI needs the same answer to decide whether to offer the button, and a
+ * duplicated phase list there would drift. The reducer stays the authority.
+ *
+ * Why exactly these four:
+ *  - ROLL_OFF / INITIAL_BET: the dice do not exist yet (`own` is null), so nobody can be
+ *    holding a lantern. Excluded explicitly so the guard fails with "no lantern" honestly
+ *    rather than by accident.
+ *  - SHOWDOWN: never observable. goToShowdown sets it and then tail-calls resolveHand, which
+ *    overwrites it with HAND_COMPLETE or MATCH_OVER in the same step — no reducer output ever
+ *    carries it, so listing it would be dead code.
+ *  - HAND_COMPLETE / MATCH_OVER: the hand is over and so is its lantern. Allowing a peek here
+ *    would let a player bank one they declined to spend.
+ */
+export function inPeekablePhase(state: GameState): boolean {
+  return (
+    state.phase === 'STEAL' ||
+    state.phase === 'REROLL_SELECT' ||
+    state.phase === 'MULINELLO_SELECT' ||
+    state.phase === 'SECOND_BET'
+  )
 }
 
 /** The minimum an opening bet must be for the current phase. */
@@ -486,10 +512,6 @@ function startHandAfterInitialBet(state: GameState, rng: Rng): GameState {
   // A Nero di Seppia in one seat's dice hides one of the OPPONENT's, so this has to run
   // after both hands exist.
   next = applyConcealment(next, rng)
-  // Its mirror image: a Lanterna reveals what is in the opponent's DECK. Kept adjacent so
-  // the "information effects land on the deal" pattern is findable, and after the setHand
-  // calls above for the same reason — seatHolds cannot see dice that are not there yet.
-  next = applyLanternReveal(next)
 
   // Log the full flow: both players' rolled dice, then the common dice.
   //
@@ -558,64 +580,6 @@ function applyConcealment(state: GameState, rng: Rng): GameState {
   return next
 }
 
-/**
- * Lights every Dado Lanterna: each holder learns the SPECIALS in the opponent's deck.
- *
- * The mirror of applyConcealment — that one takes knowledge away, this one hands it over. And
- * unlike every other ability in the game it consumes NO Rng, because nothing about it is
- * chosen: no target, no victim index, no chance roll. That is why it cannot shift the dice
- * stream, and there is a test asserting exactly that.
- *
- * ACCUMULATES rather than overwrites. The lantern is lit only for the hand it was drawn in,
- * but a deck is fixed for the whole match, so what a player has already read stays known —
- * blanking it next hand would not un-know it, it would only look like a bug. `revealedDeckSpecials`
- * therefore grows and never shrinks, and the UI distinguishes "lit now" from "seen earlier" by
- * checking whether the seat still holds one.
- *
- * Plain slots are not revealed: with at most one die of each ability in a deck, the specials
- * ARE the information — the other slots are all identical d6.
- *
- * A seat whose opponent has no deck (drops or pinned mode) learns nothing. Honest rather than
- * broken: there is no deck to illuminate.
- */
-function applyLanternReveal(state: GameState): GameState {
-  let next = state
-  for (const seat of ['human', 'bot'] as const) {
-    // seatHolds, not seatHoldsActive: a Lanterna is not spongeable (its information is already
-    // out by the time a Spugna is aimed), so the sponge-aware variant would be misleading.
-    if (!seatHolds(next, seat, 'DADO_LANTERNA')) {
-      continue
-    }
-    const opponentDeck = next.decks[otherPlayer(seat)]
-    if (opponentDeck === null) {
-      continue
-    }
-
-    const known = new Set(next.revealedDeckSpecials[seat])
-    const found = deckSpecials(opponentDeck)
-    const fresh = found.filter((id) => !known.has(id))
-    if (fresh.length === 0) {
-      // Already knew everything this deck holds. Staying silent matters: a lantern held for
-      // three hands running would otherwise announce the same list three times.
-      continue
-    }
-
-    // Rebuilt in registry order rather than appended, so the array is canonical regardless of
-    // the order reveals happened in — same reasoning as buildDeck in deck.ts.
-    const merged = ALL_ABILITY_IDS.filter((id) => known.has(id) || fresh.includes(id))
-    next = {
-      ...next,
-      revealedDeckSpecials: { ...next.revealedDeckSpecials, [seat]: merged },
-    }
-    next = withLog(
-      next,
-      `Lanterna di ${labelOf(seat)}: nel mazzo di ${labelOf(otherPlayer(seat))} ci sono ${fresh
-        .map((id) => `${abilitySpec(id)?.icon}${abilitySpec(id)?.name}`)
-        .join(', ')}.`,
-    )
-  }
-  return next
-}
 
 /**
  * Whether `seat` owns a die carrying `ability` — among its 4 own dice or as its stolen die.
@@ -1078,6 +1042,40 @@ function rerollMulinelloDie(state: GameState, player: PlayerId, rng: Rng): GameS
   return withLog(
     setHand(state, player, { stolen: after }),
     `Mulinello di ${labelOf(player)}: il dado rubato passa da ${before.value} a ${after.value}.`,
+  )
+}
+
+// --- DADO_LANTERNA: one look at the opponent's deck ---
+
+/**
+ * Spends a Dado Lanterna's peek: the holder gets to look at the opponent's 12-die deck.
+ *
+ * Records only that the look was TAKEN, never what was in it. The deck is already on the state
+ * and immutable for the match, so the UI reads `decks[opponent]` at the moment it renders — a
+ * stored snapshot would duplicate state AND make a glance permanent, which is the one thing
+ * this ability must not be.
+ *
+ * For the same reason THE LOG LINE DOES NOT NAME THE DICE. Writing them there would preserve
+ * the peek forever in the action log, quietly undoing the whole point.
+ *
+ * Consumes no Rng: nothing here is rolled or chosen.
+ *
+ * NOT gated on `toAct` — see LanternPeekAction for why, and there is a test pinning it.
+ */
+function handleLanternPeek(state: GameState, player: PlayerId): GameState {
+  assert(inPeekablePhase(state), 'LANTERNA_PEEK only allowed once the dice are on the table')
+  assert(seatHolds(state, player, 'DADO_LANTERNA'), 'only a Dado Lanterna holder may peek')
+  assert(!state.hands[player].lanternaUsed, 'the Lanterna peek is once per hand')
+  // Rejected rather than silently spent: asking to look at a deck that does not exist (a
+  // drops- or pinned-mode opponent) is a caller bug, and this file fails loudly on those.
+  assert(
+    state.decks[otherPlayer(player)] !== null,
+    'the opponent has no deck to peek at',
+  )
+
+  return withLog(
+    setHand(state, player, { lanternaUsed: true }),
+    `${labelOf(player)} accende la Lanterna e sbircia il mazzo di ${labelOf(otherPlayer(player))}.`,
   )
 }
 

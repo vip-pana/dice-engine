@@ -1930,101 +1930,159 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
   })
 })
 
-describe('DADO_LANTERNA: reveals the specials in the opponent deck', () => {
+describe('DADO_LANTERNA: one peek at the opponent deck, once per hand', () => {
+  // WHAT THESE TESTS CANNOT CHECK, stated up front so nobody wonders why the twelve dice are
+  // never asserted: the peek stores NOTHING. The engine answers only "was the look allowed"
+  // and "has it been spent" — the contents come straight from `decks.bot` when the panel
+  // renders, and there are no component tests in this repo. What is verifiable here is the
+  // rules: acceptance, rejection, the flag, its reset, and zero Rng. The rendering path is at
+  // least not novel — DeckPreview already draws the human's own deck.
   const LANTERNA_ONLY: Loadout = ['DADO_LANTERNA', null, null, null]
   const BOT_SPECIALS: readonly AbilityId[] = ['DADO_TORPEDO', 'DADO_D_ORO', 'NERO_DI_SEPPIA']
   const botDeck = buildDeck([...BOT_SPECIALS])
+  const peek = (player: 'human' | 'bot') => ({ type: 'LANTERNA_PEEK' as const, player })
 
   /** A match where the human is pinned to a loadout and the bot plays a known deck. */
   function withBotDeck(loadout: Loadout): ReturnType<typeof createInitialState> {
     return createInitialState({ loadouts: { human: loadout }, decks: { bot: botDeck } })
   }
 
-  it('reveals exactly the specials in the deck, in registry order', () => {
+  it('spends the peek and records it WITHOUT naming the dice', () => {
+    // The log must not list the deck: doing so would make a glance permanent through the
+    // action log, which is precisely what this ability is not. This is the regression guard.
     const rng = createRng(701)
-    const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
-    // Registry order, not the order they were listed in BOT_SPECIALS above.
-    expect(s.revealedDeckSpecials.human).toEqual(
-      ALL_ABILITY_IDS.filter((id) => BOT_SPECIALS.includes(id)),
-    )
-    // Only the specials: the plain slots are not listed.
-    expect(s.revealedDeckSpecials.human).toHaveLength(BOT_SPECIALS.length)
-  })
-
-  it('reveals nothing without one', () => {
-    const rng = createRng(702)
-    const s = playToSteal(withBotDeck(['STELLA_ESSICCATA', null, null, null]), rng)
-    expect(s.revealedDeckSpecials.human).toEqual([])
-    expect(s.revealedDeckSpecials.bot).toEqual([])
-  })
-
-  it('keeps what it revealed after the hand ends — the deck never changes', () => {
-    // Pins preservation-by-omission in handleNextHand: this field is deliberately absent from
-    // that function's reset list, which is invisible at the reset site.
-    const rng = createRng(703)
     let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
-    const revealed = s.revealedDeckSpecials.human
-    expect(revealed.length).toBeGreaterThan(0)
+    expect(s.hands.human.lanternaUsed).toBe(false)
 
-    s = playHandToCompletion(s, rng)
-    expect(s.revealedDeckSpecials.human).toEqual(revealed)
-    if (s.phase !== 'MATCH_OVER') {
-      s = reducer(s, { type: 'NEXT_HAND' }, rng)
-      expect(s.revealedDeckSpecials.human).toEqual(revealed)
+    s = reducer(s, peek('human'), rng)
+    expect(s.hands.human.lanternaUsed).toBe(true)
+
+    const line = s.log.find((l) => /Lanterna/.test(l))!
+    expect(line).toBeDefined()
+    for (const id of BOT_SPECIALS) {
+      expect(line).not.toContain(ABILITIES[id].name)
+      expect(line).not.toContain(ABILITIES[id].icon)
     }
   })
 
-  it('does not duplicate entries or re-announce across hands', () => {
+  it('is legal in every phase from the deal onwards', () => {
+    // STEAL, REROLL_SELECT, MULINELLO_SELECT, SECOND_BET. The Mulinello in the loadout is what
+    // makes its phase reachable at all.
+    const rng = createRng(702)
+    const start = createInitialState({
+      loadouts: { human: ['DADO_LANTERNA', 'MULINELLO', null, null] },
+      decks: { bot: botDeck },
+    })
+    let s = playToSteal(start, rng)
+    expect(s.phase).toBe('STEAL')
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
+
+    const np = other(s.primary)
+    s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+    s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    expect(s.phase).toBe('REROLL_SELECT')
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
+
+    s = reducer(s, rerollAction(s, s.primary, []), rng)
+    s = reducer(s, rerollAction(s, np, []), rng)
+    expect(s.phase).toBe('MULINELLO_SELECT')
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
+
+    s = passMulinelli(s, rng)
+    expect(s.phase).toBe('SECOND_BET')
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
+  })
+
+  it('is rejected before the dice exist and after the hand is over', () => {
+    const rng = createRng(703)
+    const fresh = withBotDeck(LANTERNA_ONLY)
+    // ROLL_OFF and INITIAL_BET: nobody can be holding a lantern yet, `own` is still null.
+    expect(() => reducer(fresh, peek('human'), rng)).toThrow(/once the dice are on the table/)
+
+    let s = playToSteal(fresh, rng)
+    s = playHandToCompletion(s, rng)
+    // The hand is over and so is its lantern — an unspent peek cannot be banked.
+    expect(() => reducer(s, peek('human'), rng)).toThrow(/once the dice are on the table/)
+  })
+
+  it('is once per hand', () => {
     const rng = createRng(704)
     let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
-    const lines = () => s.log.filter((l) => /^Lanterna di/.test(l)).length
-    expect(lines()).toBe(1)
-
-    s = playHandToCompletion(s, rng)
-    if (s.phase !== 'MATCH_OVER') {
-      s = reducer(s, { type: 'NEXT_HAND' }, rng)
-      s = playToSteal(s, rng)
-      // Pinned loadout, so the human still holds it — and there is nothing new to say.
-      expect(new Set(s.revealedDeckSpecials.human).size).toBe(
-        s.revealedDeckSpecials.human.length,
-      )
-      expect(lines()).toBe(1)
-    }
+    s = reducer(s, peek('human'), rng)
+    expect(() => reducer(s, peek('human'), rng)).toThrow(/once per hand/)
   })
 
-  it('reveals nothing when the opponent has no deck', () => {
-    // A drops- or pinned-mode opponent has no deck to illuminate. Honest, not a crash.
+  it('grants a fresh peek next hand', () => {
+    // The emptyHandState reset. Replaces yesterday's persistence test: same structural
+    // question about a hand boundary, opposite expected answer.
     const rng = createRng(705)
-    const s = playToSteal(createInitialState({ loadouts: { human: LANTERNA_ONLY } }), rng)
-    expect(s.revealedDeckSpecials.human).toEqual([])
+    let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    s = reducer(s, peek('human'), rng)
+    s = playHandToCompletion(s, rng)
+    if (s.phase === 'MATCH_OVER') {
+      return
+    }
+    s = reducer(s, { type: 'NEXT_HAND' }, rng)
+    expect(s.hands.human.lanternaUsed).toBe(false)
+    s = playToSteal(s, rng)
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
   })
 
-  it('consumes no Rng at all — the property that makes it safe to add', () => {
-    // Every other ability either rolls or picks. This one does neither, so adding it cannot
-    // shift the dice stream. Same seed, lantern vs no lantern: identical dice.
-    const dice = (loadout: Loadout): readonly number[] => {
-      const rng = createRng(706)
-      const s = playToSteal(withBotDeck(loadout), rng)
+  it('does not take a turn: toAct and phase are untouched', () => {
+    // The test that protects the deliberate absence of a `toAct` guard. A future refactor
+    // "tidying" this handler to match the others would break exactly this.
+    const rng = createRng(706)
+    const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+    // Peek out of turn, on purpose: whoever is to act, it is not our business.
+    const after = reducer(s, peek('human'), rng)
+    expect(after.toAct).toBe(s.toAct)
+    expect(after.phase).toBe(s.phase)
+  })
+
+  it('is rejected from a seat holding no lantern', () => {
+    const rng = createRng(707)
+    const s = playToSteal(withBotDeck(['STELLA_ESSICCATA', null, null, null]), rng)
+    expect(() => reducer(s, peek('human'), rng)).toThrow(/only a Dado Lanterna holder/)
+  })
+
+  it('is rejected when the opponent has no deck', () => {
+    // A drops- or pinned-mode opponent has nothing to illuminate. Rejected rather than
+    // silently burning the peek: asking is a caller bug.
+    const rng = createRng(708)
+    const s = playToSteal(createInitialState({ loadouts: { human: LANTERNA_ONLY } }), rng)
+    expect(() => reducer(s, peek('human'), rng)).toThrow(/no deck to peek at/)
+  })
+
+  it('consumes no Rng: peeking mid-hand leaves every later die unchanged', () => {
+    // Every other ability rolls or picks. This one does neither, so it cannot shift the dice
+    // stream — which is what lets it be dispatched at any moment without consequence.
+    const finalDice = (withPeek: boolean): readonly number[] => {
+      const rng = createRng(709)
+      let s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
+      if (withPeek) {
+        s = reducer(s, peek('human'), rng)
+      }
+      const np = other(s.primary)
+      s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
+      s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+      s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
+      s = reducer(s, rerollAction(s, np, [0, 1, 2, 3]), rng)
       return [
         ...s.hands.human.own!.map((d) => d.value),
         ...s.hands.bot.own!.map((d) => d.value),
-        ...s.common!.map((d) => d.value),
       ]
     }
-    expect(dice(LANTERNA_ONLY)).toEqual(dice(['DADO_LANTERNA', null, null, null]))
-    // And against a seat holding a plain loadout, only the human's OWN first die differs
-    // (it carries the ability); the bot's dice and the commons must match exactly.
-    const withLantern = dice(LANTERNA_ONLY)
-    const withoutLantern = dice([null, null, null, null])
-    expect(withLantern.slice(4)).toEqual(withoutLantern.slice(4))
+    expect(finalDice(true)).toEqual(finalDice(false))
   })
 
   it('cannot be absorbed by a Dado Spugna', () => {
-    // Different reason from Stella/D4: those committed a face, this already handed over the
-    // information. Either way the reducer refuses rather than no-opping.
+    // Not because the information is already out — a player-triggered peek may not have
+    // happened yet. Because cancelling it would resolve by WHEN the player clicked: a peek
+    // taken in STEAL is already spent, one taken in SECOND_BET is not, and REROLL_SELECT is
+    // sequential. That is the same race DADO_SPUGNA is itself immune to, only worse.
     expect(ABILITIES.DADO_LANTERNA.spongeable).not.toBe(true)
 
-    const rng = createRng(707)
+    const rng = createRng(710)
     let s = playToSteal(
       createInitialState({
         loadouts: { human: ['DADO_SPUGNA', null, null, null], bot: LANTERNA_ONLY },
@@ -2047,7 +2105,7 @@ describe('DADO_LANTERNA: reveals the specials in the opponent deck', () => {
   })
 
   it('shows its icon in the action log like any other special', () => {
-    const rng = createRng(708)
+    const rng = createRng(711)
     const s = playToSteal(withBotDeck(LANTERNA_ONLY), rng)
     const rollLine = s.log.find((l) => l.startsWith('Lancio'))!
     expect(rollLine).toContain(ABILITIES.DADO_LANTERNA.icon)

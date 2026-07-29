@@ -82,18 +82,22 @@ export type AbilityId =
    */
   | 'DADO_SPUGNA'
   /**
-   * Reveals which SPECIALS sit in the opponent's 12-die deck.
+   * One look at the opponent's whole 12-die deck, taken whenever its holder wants.
    *
    * The second ability that changes no value at all, only who knows what — see
    * NERO_DI_SEPPIA above, which is its mirror image. Where that one takes knowledge away
    * from its victim, this one takes knowledge away from a secret: `decks[opponent]` is the
    * only genuinely hidden state in the game, since the four dice in play are open
-   * information both ways (see viewFor in view.ts). Accumulated into
-   * `revealedDeckSpecials` on GameState rather than on PlayerHandState, because what has
-   * been seen must outlive the hand that saw it.
+   * information both ways (see viewFor in view.ts).
    *
-   * Fires automatically on the deal (see applyLanternReveal in game.ts). No target, no
-   * phase, no action: there is nothing for a player to choose.
+   * A GLANCE, not a note. Nothing about what was seen is stored: the deck is already on the
+   * state and fixed for the match, so the UI reads it live while the panel is open and there
+   * is nothing to reopen once closed. Only the spent-ness is state, as `lanternaUsed` on
+   * PlayerHandState — once per hand, reset with the hand.
+   *
+   * Player-triggered, in any phase from STEAL to SECOND_BET (see handleLanternPeek and
+   * inPeekablePhase in game.ts). Consumes no Rng, and is the only action in the reducer that
+   * takes no turn — you can peek while waiting for the opponent.
    */
   | 'DADO_LANTERNA'
 
