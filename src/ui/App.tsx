@@ -26,6 +26,7 @@ import {
 } from '../engine'
 import { useGame } from './useGame'
 import { categoryLabel, playerLabel } from './labels'
+import { DIE_SIZE, useIsPhone, useIsWide } from './responsive'
 import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
 import { DeckPreview } from './components/DeckPreview'
@@ -147,6 +148,7 @@ function BotDeckChooser({
   onBack: () => void
 }): JSX.Element {
   const [composing, setComposing] = useState(false)
+  const phone = useIsPhone()
 
   if (composing) {
     return (
@@ -197,10 +199,12 @@ function BotDeckChooser({
         color: '#e2e8f0',
         maxWidth: 620,
         margin: '0 auto',
-        padding: '2rem 1.5rem',
+        padding: phone ? '1.25rem 0.75rem 2rem' : '2rem 1.5rem',
       }}
     >
-      <h1 style={{ marginTop: 0, marginBottom: 6 }}>Il mazzo del Bot</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 6, fontSize: phone ? '1.5rem' : undefined }}>
+        Il mazzo del Bot
+      </h1>
       <p style={{ color: '#94a3b8', fontSize: 14, lineHeight: 1.6, marginTop: 0 }}>
         Il suo mazzo resta nascosto durante la partita: solo una <strong>🏮 Lanterna</strong>{' '}
         può darti una sbirciata, una volta per mano.
@@ -226,6 +230,7 @@ function BotDeckChooser({
         style={{
           marginTop: 10,
           padding: '8px 14px',
+          minHeight: 44,
           borderRadius: 8,
           border: '1px solid #1e293b',
           background: 'transparent',
@@ -251,6 +256,7 @@ function Match({
   // No seed: every match deals differently. Pass one to replay a specific game.
   const { state: trueState, dispatch, newMatch } = useGame(undefined, optionsForSetup(setup))
   const wide = useIsWide()
+  const phone = useIsPhone()
 
   // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
   // Seppia must be unreadable here too — including indirectly, via the "current hand"
@@ -264,7 +270,11 @@ function Match({
         fontFamily: 'system-ui, sans-serif',
         color: '#e2e8f0',
         background: '#0f172a',
-        minHeight: '100vh',
+        // dvh, not vh: on mobile browsers `100vh` is the viewport with the URL bar RETRACTED, so
+        // a 100vh page is taller than the screen and jumps as the bar hides and shows. The
+        // dynamic unit tracks the actually-visible height. Unsupported units are ignored, and
+        // on a min-height that degrades to "no minimum", which is harmless.
+        minHeight: '100dvh',
       }}
     >
       {/*
@@ -281,18 +291,23 @@ function Match({
         style={{
           display: 'grid',
           gridTemplateColumns: wide ? 'minmax(0, 720px) minmax(240px, 300px)' : 'minmax(0, 1fr)',
-          gap: 24,
+          gap: phone ? 14 : 24,
           alignItems: 'stretch',
           maxWidth: 1100,
           margin: '0 auto',
-          padding: '1.5rem',
+          // 24px of side padding is 13% of a 360px screen spent on nothing. Phones get 12.
+          padding: phone ? '12px 12px 28px' : '1.5rem',
           // `box-sizing: border-box` so the padding sits INSIDE the 100vh rather than
           // adding to it — otherwise the page scrolls by exactly the padding.
           ...(wide ? { height: '100vh', boxSizing: 'border-box' as const } : null),
         }}
       >
         <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <h1 style={{ marginTop: 0 }}>Poker di Dadi</h1>
+          {/* On a phone the title is pure overhead above the game, so it shrinks rather than
+              eating a fifth of the first screenful. */}
+          <h1 style={{ marginTop: 0, fontSize: phone ? '1.5rem' : undefined, marginBottom: phone ? 12 : undefined }}>
+            Poker di Dadi
+          </h1>
           <ScoreBar state={state} />
           <BotAutoPlayer state={trueState} dispatch={dispatch} />
           <Table state={state} dispatch={dispatch} grow={wide} />
@@ -303,6 +318,9 @@ function Match({
             onNewMatch={() => newMatch()}
             onRebuildDeck={onRebuild}
           />
+          {/* The log's newest line, inline with the game, so the phone layout can keep the full
+              log folded away without hiding what just happened. */}
+          {phone && <LastMove log={state.log} />}
         </main>
         {/* Reference column: your deck, the rules references (tabbed), then the running log. */}
         <aside
@@ -314,43 +332,101 @@ function Match({
             minHeight: 0,
           }}
         >
-          <DeckPanel
-            deck={deck}
-            onRebuildDeck={onRebuild}
-            matchInProgress={state.phase !== 'MATCH_OVER'}
-          />
-          <BotDeckPanel state={state} dispatch={dispatch} />
-          <ReferencePanel state={state} grow={wide} />
-          {/* Takes the remaining height, so the log reaches the bottom of the page. */}
-          <ActionLog log={state.log} grow={wide} />
+          <ReferenceStack phone={phone}>
+            <DeckPanel
+              deck={deck}
+              onRebuildDeck={onRebuild}
+              matchInProgress={state.phase !== 'MATCH_OVER'}
+            />
+            <BotDeckPanel state={state} dispatch={dispatch} />
+            <ReferencePanel state={state} grow={wide} />
+            {/* Takes the remaining height, so the log reaches the bottom of the page. */}
+            <ActionLog log={state.log} grow={wide} />
+          </ReferenceStack>
         </aside>
       </div>
     </div>
   )
 }
 
-/** Breakpoint below which the sidebar stacks under the game instead of sitting beside it. */
-const WIDE_BREAKPOINT = 1024
+/**
+ * The reference column: side by side with the game on a wide screen, folded behind one tap on a
+ * phone.
+ *
+ * Stacking the column under the game (which is what the single-column grid does) is right for a
+ * tablet and wrong for a phone: the deck, both rule references and the whole log come to well
+ * over 2000px of material that the player has to scroll PAST to reach nothing, because the game
+ * itself is already above it. Folded, the first screenful is the game and the reference is one
+ * tap away.
+ *
+ * A native `<details>` rather than a useState toggle: it is a disclosure widget with keyboard
+ * and screen-reader behaviour already correct, and the browser keeps the open/closed state
+ * across re-renders without this component holding any.
+ */
+function ReferenceStack({
+  phone,
+  children,
+}: {
+  phone: boolean
+  children: ReactNode
+}): JSX.Element {
+  const stack = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>{children}</div>
+  )
+  if (!phone) {
+    return stack
+  }
+  return (
+    <details style={{ background: '#111c31', border: '1px solid #1e293b', borderRadius: 12 }}>
+      <summary
+        style={{
+          padding: '14px 16px',
+          minHeight: 44,
+          fontSize: 15,
+          fontWeight: 700,
+          color: '#e2e8f0',
+          cursor: 'pointer',
+          // The marker is kept (it is the affordance that this opens) but the row reads as a
+          // button, so the label carries the weight rather than the triangle.
+          listStyle: 'revert',
+        }}
+      >
+        Mazzo, regole e registro
+      </summary>
+      <div style={{ padding: '0 12px 12px' }}>{stack}</div>
+    </details>
+  )
+}
 
 /**
- * Tracks whether the viewport is wide enough for the two-column layout.
+ * The most recent log line, shown on the phone layout only.
  *
- * A matchMedia hook rather than a stylesheet because this app styles everything inline;
- * adding a single CSS file just for one breakpoint would split where layout lives.
+ * The full log lives inside the folded reference stack, and a player should not have to open it
+ * to learn that the bot just raised. This surfaces exactly the newest entry — the one piece of
+ * the log that is about the moment you are in.
  */
-function useIsWide(): boolean {
-  const query = `(min-width: ${WIDE_BREAKPOINT}px)`
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches)
-
-  useEffect(() => {
-    const mql = window.matchMedia(query)
-    const onChange = (e: MediaQueryListEvent): void => setWide(e.matches)
-    setWide(mql.matches)
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
-  }, [query])
-
-  return wide
+function LastMove({ log }: { log: readonly string[] }): JSX.Element | null {
+  const last = log[log.length - 1]
+  if (last === undefined) {
+    return null
+  }
+  return (
+    <p
+      style={{
+        margin: '14px 0 0',
+        padding: '10px 12px',
+        borderRadius: 10,
+        background: '#111c31',
+        border: '1px solid #1e293b',
+        color: '#94a3b8',
+        fontSize: 13,
+        lineHeight: 1.45,
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {last}
+    </p>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -387,12 +463,17 @@ function BotAutoPlayer(props: {
 // ---------------------------------------------------------------------------
 
 function ScoreBar({ state }: { state: GameState }): JSX.Element {
+  const phone = useIsPhone()
   return (
     <section
       style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        gap: 12,
+        // A grid, not a `space-between` flex row. Five stats whose labels total ~270px of text
+        // cannot share a 300px phone row: they used to survive only by breaking every label onto
+        // two or three lines ("Punteggio / (Bo3)") and leaving the values on a ragged baseline.
+        // auto-fit reflows them into as many rows as the width needs, with no breakpoint.
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(74px, 1fr))',
+        gap: 10,
         padding: '10px 14px',
         borderRadius: 10,
         background: '#1e293b',
@@ -400,7 +481,13 @@ function ScoreBar({ state }: { state: GameState }): JSX.Element {
       }}
     >
       <Stat label="Mano" value={`${state.handNumber}`} />
-      <Stat label="Punteggio (Bo3)" value={`${state.score.human} - ${state.score.bot}`} />
+      {/* "(Bo3)" is 30px of label that wraps onto a second line in a phone-width track, which
+          drops this stat's value below its neighbours' and makes the whole strip look broken.
+          The match format is stated on the setup screen; the live number does not need it. */}
+      <Stat
+        label={phone ? 'Punteggio' : 'Punteggio (Bo3)'}
+        value={`${state.score.human} - ${state.score.bot}`}
+      />
       <Stat label="Tu (monete)" value={`${state.bankroll.human}`} />
       <Stat label="Bot (monete)" value={`${state.bankroll.bot}`} />
       <Stat label="Piatto" value={`${state.pot}`} highlight />
@@ -418,8 +505,8 @@ function Stat({
   highlight?: boolean
 }): JSX.Element {
   return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontSize: 11, color: '#94a3b8' }}>{label}</div>
+    <div style={{ textAlign: 'center', minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 700, color: highlight ? '#fbbf24' : '#e2e8f0' }}>
         {value}
       </div>
@@ -627,6 +714,7 @@ function ReferencePanel({
   grow?: boolean
 }): JSX.Element {
   const [tab, setTab] = useState<ReferenceTab>('abilities')
+  const phone = useIsPhone()
   // Accent follows the active tab so the panel border keeps signalling what you're reading.
   const accent = tab === 'abilities' ? `${ABILITY_ACCENT}44` : '#1e293b'
 
@@ -662,10 +750,13 @@ function ReferencePanel({
               style={{
                 flex: 1,
                 padding: '6px 8px',
+                // These were the smallest tap targets in the app at ~26px tall. They are the
+                // only way to switch reference, so they have to be thumb-sized.
+                minHeight: 44,
                 borderRadius: 8,
                 cursor: 'pointer',
                 fontFamily: 'inherit',
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 700,
                 letterSpacing: 0.3,
                 background: active ? '#111c31' : 'transparent',
@@ -683,7 +774,10 @@ function ReferencePanel({
         style={{
           overflowY: 'auto',
           minHeight: 0,
-          ...(grow ? { flex: 1 } : { maxHeight: 340 }),
+          // On a phone this panel already sits inside a folded disclosure, so capping it would
+          // put a scroller inside a scroller — the one gesture guaranteed to trap a thumb. Let
+          // it size to content there and leave the page as the only thing that scrolls.
+          ...(grow ? { flex: 1 } : phone ? null : { maxHeight: 340 }),
         }}
       >
         {tab === 'abilities' ? <AbilityReference state={state} /> : <RankingReference state={state} />}
@@ -910,6 +1004,7 @@ function Table({
   grow?: boolean
 }): JSX.Element {
   const primaryLabel = playerLabel(state.primary)
+  const phone = useIsPhone()
   const humanIsToAct = state.toAct === 'human'
 
   // A Dado Torpedo is aimed at a BOT die but confirmed from the human row, so the choice
@@ -956,7 +1051,13 @@ function Table({
           borderRadius: 16,
           border: '1px solid #1e293b',
           background: 'linear-gradient(180deg, #101c2e 0%, #0d1826 55%, #101c2e 100%)',
-          padding: '14px 16px',
+          // Tighter felt padding on a phone: 16px a side is width the dice rows need more.
+          padding: phone ? '12px 10px' : '14px 16px',
+          // The rows wrap, so nothing should reach past the panel — but if a future row ever
+          // does, it scrolls INSIDE the felt rather than dragging the whole page sideways and
+          // making the browser zoom the app out. Previously this guard existed only on wide.
+          minWidth: 0,
+          overflowX: 'auto',
           // When stretching, the panel fills the column and the bands share the extra
           // height (capped, see Band). `overflow: auto` keeps a tall hand scrollable on a
           // short viewport instead of spilling out of the panel.
@@ -1084,7 +1185,34 @@ function FeltDivider(): JSX.Element {
   )
 }
 
+/**
+ * Shared layout for the three dice rows (commons, bot, you).
+ *
+ * WRAPPING is the load-bearing part. A row is five dice plus a stolen die plus a hand badge, and
+ * at the desktop die size that is over 500px of content — against ~295px inside the felt on a
+ * phone. It used to be a non-wrapping row, so the excess did not reflow: it pushed the page
+ * wider than the screen, and a mobile browser answers that by scaling the whole app down. With
+ * `flexWrap` the overflow becomes a second line instead of a zoomed-out page, and the phone die
+ * size (DIE_SIZE.phone) is chosen so a full row still fits on one line at 320px anyway.
+ */
+function diceRowStyle(phone: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    columnGap: phone ? 8 : 12,
+    rowGap: phone ? 10 : 12,
+  }
+}
+
+/** The die edge for the current layout. */
+function useDieSize(): number {
+  return useIsPhone() ? DIE_SIZE.phone : DIE_SIZE.default
+}
+
 function RollOffView({ state }: { state: GameState }): JSX.Element | null {
+  const dieSize = useDieSize()
+
   if (state.rollOff === null && state.phase !== 'ROLL_OFF') {
     return null
   }
@@ -1107,6 +1235,7 @@ function RollOffView({ state }: { state: GameState }): JSX.Element | null {
     <div
       style={{
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 16,
         padding: '10px 14px',
@@ -1121,9 +1250,9 @@ function RollOffView({ state }: { state: GameState }): JSX.Element | null {
         <Placeholder text="Premi «Tira il dado»" />
       ) : (
         <>
-          <DieView value={state.rollOff.human.value} caption="tu" />
+          <DieView value={state.rollOff.human.value} caption="tu" size={dieSize} />
           <span style={{ color: '#64748b' }}>vs</span>
-          <DieView value={state.rollOff.bot.value} caption="bot" />
+          <DieView value={state.rollOff.bot.value} caption="bot" size={dieSize} />
         </>
       )}
     </div>
@@ -1139,13 +1268,15 @@ function CommonRow({
   canSteal: boolean
   dispatch: UseGameDispatch
 }): JSX.Element {
+  const phone = useIsPhone()
+  const dieSize = useDieSize()
   if (state.common === null) {
     return <Placeholder text="Non ancora lanciati" />
   }
   return (
     // Left-aligned like the two seat rows: the three bands share one spine so the eye can
     // compare dice across them. Centring the commons broke that alignment.
-    <div style={{ display: 'flex', gap: 12 }}>
+    <div style={diceRowStyle(phone)}>
       {state.common.map((die, index) => {
         const taken = state.stolenCommonIndices.includes(index)
         return (
@@ -1159,6 +1290,7 @@ function CommonRow({
             // that arrived in a seat row would otherwise carry the same label, which is half
             // of why a steal reads as if nothing moved.
             caption={taken ? 'preso' : canSteal ? 'rubabile' : undefined}
+            size={dieSize}
             onClick={
               canSteal && !taken
                 ? () => dispatch({ type: 'STEAL', player: 'human', commonIndex: index })
@@ -1189,8 +1321,10 @@ function BotRow({
   // so the ability is visibly doing something rather than being invisible to its caster.
   const blinded = new Set(hand.concealedIndices)
   const live = liveFinalHand(hand) // reuse: own4 + stolen -> Hand, if formed
+  const phone = useIsPhone()
+  const dieSize = useDieSize()
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+    <div style={diceRowStyle(phone)}>
       {hand.own === null ? (
         <Placeholder text="In attesa del lancio" />
       ) : (
@@ -1206,6 +1340,7 @@ function BotRow({
               // else in the game.
               selected={aiming && torpedoTarget === i}
               caption={torpedoTarget === i ? 'bersaglio ⚡' : undefined}
+              size={dieSize}
               onClick={aiming && onAim !== undefined ? () => onAim(i) : undefined}
             />
           ))}
@@ -1220,11 +1355,12 @@ function BotRow({
               ability={hand.stolen.ability}
               rolls={hand.stolen.rolls}
               caption="rubato"
+              size={dieSize}
             />
           ) : (
             <Placeholder text="dado rubato" />
           )}
-          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live />}
+          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live ownLine={phone} />}
         </>
       )}
     </div>
@@ -1252,6 +1388,8 @@ function HumanRow({
   const selecting = state.phase === 'REROLL_SELECT' && state.toAct === 'human'
   const [selected, setSelected] = useState<readonly number[]>([])
   const spongeChoices = spongeableThreats(state)
+  const phone = useIsPhone()
+  const dieSize = useDieSize()
 
   // Reset selection whenever we (re)enter selection for a new hand.
   useEffect(() => {
@@ -1289,7 +1427,7 @@ function HumanRow({
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={diceRowStyle(phone)}>
         {hand.own.map((die, i) => (
           <DieView
             key={i}
@@ -1308,6 +1446,7 @@ function HumanRow({
                   ? `scegli al buio ${abilitySpec('DADO_PAGURO')?.icon}`
                   : undefined
             }
+            size={dieSize}
             onClick={selecting ? () => toggle(i) : undefined}
           />
         ))}
@@ -1317,6 +1456,7 @@ function HumanRow({
             ability={hand.stolen.ability}
             rolls={hand.stolen.rolls}
             caption="rubato"
+            size={dieSize}
           />
         ) : (
           <Placeholder text="dado rubato" />
@@ -1325,9 +1465,9 @@ function HumanRow({
           (hand.own.some((d) => d.concealed) ? (
             // One die is unknown, so the category is unknowable: showing the one computed
             // from the placeholder would be a confident lie.
-            <HandBadge label="Mano incerta — un dado è nascosto" live />
+            <HandBadge label="Mano incerta — un dado è nascosto" live ownLine={phone} />
           ) : (
-            <HandBadge label={categoryLabel(evaluateHand(liveHand))} live />
+            <HandBadge label={categoryLabel(evaluateHand(liveHand))} live ownLine={phone} />
           ))}
       </div>
 
@@ -1393,11 +1533,30 @@ function HumanRow({
   )
 }
 
-function HandBadge({ label, live = false }: { label: string; live?: boolean }): JSX.Element {
-  return (
+function HandBadge({
+  label,
+  live = false,
+  ownLine = false,
+}: {
+  label: string
+  live?: boolean
+  /**
+   * Put the badge on its own line below the dice instead of at the end of their row.
+   *
+   * Used on phones. The badge's text is the longest thing in the row — "Mano incerta — un dado è
+   * nascosto" runs ~250px — so beside the dice it either wraps into a tall blob or pushes the row
+   * past the screen. A `flexBasis: 100%` item takes a full flex line, which is how it drops below
+   * without either row needing a different structure.
+   */
+  ownLine?: boolean
+}): JSX.Element {
+  const pill = (
     <span
       style={{
-        marginLeft: 8,
+        // inline-BLOCK, not inline: an inline span that has to wrap is split into two boxes, so
+        // the rounded background tore into two half-pills mid-sentence. As a block the text wraps
+        // inside one pill. Visible on the longest label, "Mano incerta — un dado è nascosto".
+        display: 'inline-block',
         padding: '4px 10px',
         borderRadius: 999,
         fontSize: 13,
@@ -1410,6 +1569,12 @@ function HandBadge({ label, live = false }: { label: string; live?: boolean }): 
       {label}
     </span>
   )
+  if (ownLine) {
+    // The wrapper takes the line; the pill inside keeps hugging its text rather than stretching
+    // into a full-width bar.
+    return <div style={{ flexBasis: '100%', minWidth: 0 }}>{pill}</div>
+  }
+  return <span style={{ marginLeft: 8 }}>{pill}</span>
 }
 
 function Placeholder({ text }: { text: string }): JSX.Element {
@@ -1606,14 +1771,18 @@ function BettingControls({
               // field back into range without fighting the user mid-typing.
               onBlur={() => setAmount((a) => clamp(a, minAmount, maxAmount))}
               style={{
-                width: 90,
+                width: 96,
                 marginLeft: 8,
                 padding: '8px 10px',
                 borderRadius: 8,
                 border: '1px solid #334155',
                 background: '#0b1220',
                 color: '#e2e8f0',
-                fontSize: 15,
+                // 16px is not a style choice: iOS Safari ZOOMS THE PAGE IN when a focused input's
+                // text is smaller than 16px, and it does not zoom back out on blur. At 15px this
+                // field left the player stranded in a magnified layout mid-bet.
+                fontSize: 16,
+                minHeight: 44,
               }}
             />
           </label>
@@ -1705,12 +1874,16 @@ function ActionLog({
         ref={boxRef}
         style={{
           overflowY: 'auto',
-          fontSize: 12,
+          // 13, not 12: this is running prose on a phone, and it is the only record of what the
+          // bot did.
+          fontSize: 13,
           lineHeight: 1.6,
           // Long log lines must wrap inside the narrow column rather than widen it.
           overflowWrap: 'anywhere',
           // Growing: take whatever height the panel has. Otherwise cap it, so a long log
-          // does not push the page down on a stacked/mobile layout.
+          // does not push the page down on a stacked layout. The cap stays even on a phone:
+          // unlike the reference panel the log GROWS all match, so uncapped it would turn the
+          // opened disclosure into an endless scroll.
           ...(grow ? { flex: 1, minHeight: 0 } : { maxHeight: 260 }),
         }}
       >
@@ -1741,6 +1914,10 @@ const baseButton: CSSProperties = {
   padding: '10px 18px',
   borderRadius: 8,
   border: 'none',
+  // 15px text with 10px padding computed to a ~38px control — under the 44px minimum a thumb
+  // needs. The floor is set here, on the shared base, so every button in the app clears it
+  // rather than each call site remembering to.
+  minHeight: 44,
   fontSize: 15,
   fontWeight: 600,
   cursor: 'pointer',

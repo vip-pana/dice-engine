@@ -26,6 +26,15 @@
       body {
         margin: 0;
         background: #0f172a;
+        /*
+          3. Stop mobile browsers inflating text on their own. When a page is laid out wider
+             than the screen, iOS Safari and Android Chrome "help" by scaling font sizes up
+             independently of the layout, which desynchronises every size this app computes in
+             JS (see responsive.ts) from what is actually painted. We size for the viewport
+             ourselves, so the automatic adjustment is only noise.
+        */
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
       }
     </style>
   </head>

@@ -48,9 +48,14 @@ export function AbilityCard(props: AbilityCardProps): JSX.Element | null {
         {spec.icon}
       </span>
       <div style={{ minWidth: 0, textAlign: 'left' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{spec.name}</div>
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>{spec.description}</div>
-        <div style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>{spec.name}</div>
+        {/*
+          13, not 11. This is the PRIMARY rules text of the game — ten cards of it are the whole
+          deck-picking screen, and it is where a player learns what a die does. At 11px on a phone
+          it was the app's worst readability failure, and the kind row below it worse still.
+        */}
+        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.45 }}>{spec.description}</div>
+        <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
           {spec.kind === 'malus' ? 'Malus' : 'Bonus'}
           {active ? '' : ` — ${inactiveNote}`}
         </div>

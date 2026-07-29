@@ -46,7 +46,9 @@ export function HandRankingLegend({
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 8,
-              padding: '3px 8px',
+              // 5px rows rather than 3: nine of these stacked were a 23px-per-row wall of text
+              // that read as unscannable on a phone.
+              padding: '5px 8px',
               borderRadius: 6,
               // A marked row is lifted out of the list; the rest stay quiet so the eye
               // lands on the two positions that matter.
@@ -56,14 +58,15 @@ export function HandRankingLegend({
           >
             <span
               style={{
-                fontSize: 12,
+                fontSize: 13,
                 lineHeight: 1.4,
                 fontWeight: marked ? 600 : 400,
                 color: marked ? '#e2e8f0' : '#64748b',
                 minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                // Wraps instead of truncating. The old ellipsis had no `title` behind it, so a
+                // clipped name — which is what a narrow phone column produces — was unrecoverable
+                // on a touch device. A hand's name is short enough that two lines cost nothing.
+                overflowWrap: 'anywhere',
               }}
             >
               {categoryName(category)}
@@ -92,9 +95,9 @@ function Marker({ label, uncertain = false }: { label: string; uncertain?: boole
     <span
       title={uncertain ? 'Stima: un tuo dado è nascosto' : undefined}
       style={{
-        padding: '1px 7px',
+        padding: '2px 8px',
         borderRadius: 999,
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: 700,
         letterSpacing: 0.4,
         background: uncertain ? 'transparent' : isHuman ? '#164e63' : '#3f3f46',

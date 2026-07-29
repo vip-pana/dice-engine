@@ -38,6 +38,16 @@ export interface DieViewProps {
    * The face is drawn normally; only a marker is added.
    */
   readonly blindedToOpponent?: boolean | undefined
+  /**
+   * Edge of the die in px. Defaults to 52 (the desktop size); phones pass 44 so a full row of
+   * five fits without the page having to zoom out (see DIE_SIZE in responsive.ts).
+   *
+   * Only the die box scales — padding, corner radius and the concealed "?" derive from it. The
+   * corner badges deliberately do NOT: they are anchored to the box's corner by fixed negative
+   * offsets that are correct for the badge's own 18px size at any die size, so scaling them
+   * would need the offsets and their line-heights changed in lockstep for no visual gain.
+   */
+  readonly size?: number | undefined
 }
 
 /** Ink-dark accent for a die whose face is hidden from the viewer. */
@@ -86,7 +96,13 @@ export function DieView(props: DieViewProps): JSX.Element {
     rolls,
     concealed = false,
     blindedToOpponent = false,
+    size = 52,
   } = props
+  // Derived from `size` so one number moves the whole die coherently. Ratios taken from the
+  // original 52px die (6/52 padding, 10/52 radius, 24/52 glyph) so the default is unchanged.
+  const padding = Math.max(4, Math.round(size * 0.115))
+  const radius = Math.max(7, Math.round(size * 0.19))
+  const concealedGlyph = Math.round(size * 0.46)
   const clickable = onClick !== undefined
   const spec = abilitySpec(ability)
   // A concealed die shows neither pips nor split: its `value` is a placeholder, and the
@@ -106,7 +122,9 @@ export function DieView(props: DieViewProps): JSX.Element {
       : '2px solid #334155'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}
+    >
       <div style={{ position: 'relative' }}>
         <button
           type="button"
@@ -129,10 +147,14 @@ export function DieView(props: DieViewProps): JSX.Element {
             (selected ? ', selezionato' : '')
           }
           style={{
-            width: 52,
-            height: 52,
-            padding: 6,
-            borderRadius: 10,
+            width: size,
+            height: size,
+            // The die must never be squeezed by a crowded row: the pips are percentage-sized
+            // cells of a square 3x3 grid, so a shrunken box renders every pip as an ellipse —
+            // the die would visibly deform rather than just get small. Rows wrap instead.
+            flexShrink: 0,
+            padding,
+            borderRadius: radius,
             border,
             background: concealed ? '#241b3d' : dimmed ? '#1e293b' : '#f8fafc',
             opacity: dimmed ? 0.4 : 1,
@@ -147,7 +169,7 @@ export function DieView(props: DieViewProps): JSX.Element {
           }}
         >
           {concealed && (
-            <span style={{ fontSize: 24, fontWeight: 800, color: '#c4b5fd' }}>?</span>
+            <span style={{ fontSize: concealedGlyph, fontWeight: 800, color: '#c4b5fd' }}>?</span>
           )}
           {!concealed && Array.from({ length: 9 }, (_, cell) => {
             const on = PIP_LAYOUT[value].includes(cell)
@@ -223,7 +245,21 @@ export function DieView(props: DieViewProps): JSX.Element {
       {split !== null && <SplitRolls rolls={split} kept={value} accent={accent} />}
 
       {caption !== undefined && (
-        <span style={{ fontSize: 11, color: '#94a3b8' }}>{caption}</span>
+        // Capped and centred rather than free-flowing: a caption is the widest thing a die can
+        // carry ("scegli al buio 🦀" runs ~90px against a 44px die), and since this column is a
+        // flex item an uncapped caption stretches the die's cell and pushes the row over the
+        // viewport. Wrapping to a second line costs a few px of height and nothing else.
+        <span
+          style={{
+            fontSize: 11,
+            color: '#94a3b8',
+            maxWidth: size + 24,
+            textAlign: 'center',
+            lineHeight: 1.25,
+          }}
+        >
+          {caption}
+        </span>
       )}
     </div>
   )
@@ -254,12 +290,14 @@ function SplitRolls({
           <span
             key={i}
             style={{
-              width: 14,
-              height: 14,
+              // 15/10 rather than 14/9: a 9px digit on a phone is at the edge of legibility, and
+              // these chips are how the Stella's "rolled 2/6/3, kept 6" is read at all.
+              width: 15,
+              height: 15,
               borderRadius: 3,
-              fontSize: 9,
+              fontSize: 10,
               fontWeight: 700,
-              lineHeight: '14px',
+              lineHeight: '15px',
               textAlign: 'center',
               background: isKept ? accent : '#334155',
               color: isKept ? '#0f172a' : '#94a3b8',

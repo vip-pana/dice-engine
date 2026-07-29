@@ -1,9 +1,18 @@
 import type { JSX } from 'react'
 import { abilitySpec, type Deck } from '../../engine'
+import { useIsPhone } from '../responsive'
 import { accentForAbility } from './DieView'
 
-/** Slots per row: DECK_SIZE laid out as two tidy rows of six. */
-const DECK_COLUMNS = 6
+/**
+ * Slots per row: DECK_SIZE laid out as two tidy rows of six, or three rows of four on a phone.
+ *
+ * Six 52px slots plus their gaps come to 362px, which is wider than a small phone's viewport.
+ * That is not a cosmetic overflow: content wider than the viewport makes a mobile browser widen
+ * the layout viewport and scale the whole page down, so this one grid was zooming out the entire
+ * app (window.innerWidth read 386 on a 320px device). Four columns keeps the block inside the
+ * screen, and twelve still divides evenly so the deck stays one recognisable rectangle.
+ */
+const DECK_COLUMNS = { phone: 4, default: 6 } as const
 
 /** Die box size, per variant. The sidebar has far less room than the builder. */
 const SLOT_SIZE = { full: 52, compact: 32 } as const
@@ -31,18 +40,25 @@ export interface DeckPreviewProps {
  * these slots are rendered here instead.)
  */
 export function DeckPreview({ deck, variant = 'full' }: DeckPreviewProps): JSX.Element {
+  const phone = useIsPhone()
   const size = SLOT_SIZE[variant]
   const gap = variant === 'full' ? 10 : 6
+  const columns = phone ? DECK_COLUMNS.phone : DECK_COLUMNS.default
 
   return (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${DECK_COLUMNS}, 1fr)`,
+        // `minmax(0, 1fr)`, not `1fr`. A bare `1fr` is `minmax(auto, 1fr)`, and the auto minimum
+        // is the slot's intrinsic width — so with a fixed-width slot inside, the tracks could
+        // not shrink at all and the grid overflowed its own container while `maxWidth` sat there
+        // looking like it was handling the narrow case. The floor of 0 is what lets it shrink;
+        // the slots below cap their own growth instead.
+        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
         gap,
-        // Five dice plus gaps: keeps the grid from stretching the slots apart on a wide
-        // screen while still shrinking on a narrow one.
-        maxWidth: DECK_COLUMNS * size + (DECK_COLUMNS - 1) * gap,
+        // Keeps the grid from stretching the slots apart on a wide screen. Growth only — the
+        // shrinking is the tracks' job, above.
+        maxWidth: columns * size + (columns - 1) * gap,
       }}
     >
       {deck.map((id, i) => {
@@ -95,16 +111,21 @@ function DeckSlot({
         // The name is the tooltip in compact mode, where it is not printed.
         title={showLabel ? undefined : label}
         style={{
-          width: size,
-          height: size,
-          flexShrink: 0,
-          borderRadius: size > 40 ? 10 : 7,
+          // Fills its track but never grows past its nominal size, and stays square via
+          // aspect-ratio. The old `width: size` + `flexShrink: 0` made the slot an immovable
+          // floor under the grid track, which is what pushed the grid wider than the screen.
+          width: '100%',
+          maxWidth: size,
+          aspectRatio: '1 / 1',
+          // Derived from `size` rather than switched on a magic `size > 40`, which any new
+          // intermediate size would land on the wrong side of.
+          borderRadius: Math.max(7, Math.round(size * 0.19)),
           border: accent === null ? '2px solid #334155' : `3px solid ${accent}`,
           background: '#111c31',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: size > 40 ? 22 : 14,
+          fontSize: Math.round(size * 0.42),
           boxShadow: accent === null ? undefined : `0 0 10px ${accent}44`,
         }}
       >
@@ -113,9 +134,10 @@ function DeckSlot({
       {showLabel && (
         <span
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: accent === null ? '#64748b' : '#94a3b8',
-            maxWidth: 62,
+            // The track, not a fixed 62px that overflowed a 52px column by 10px.
+            maxWidth: '100%',
             textAlign: 'center',
             lineHeight: 1.3,
           }}

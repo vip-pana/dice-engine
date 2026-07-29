@@ -8,6 +8,7 @@ import {
   type AbilityId,
   type Deck,
 } from '../../engine'
+import { useIsPhone } from '../responsive'
 import { AbilityCard } from './AbilityCard'
 import { DeckPreview } from './DeckPreview'
 
@@ -43,6 +44,7 @@ export function DeckBuilder({
   note?: string
 }): JSX.Element {
   const [selected, setSelected] = useState<readonly AbilityId[]>([])
+  const phone = useIsPhone()
 
   const deck = buildDeck(selected)
   const problems = validateDeck(deck)
@@ -59,10 +61,14 @@ export function DeckBuilder({
         color: '#e2e8f0',
         maxWidth: 620,
         margin: '0 auto',
-        padding: '2rem 1.5rem',
+        padding: phone ? '1.25rem 0.75rem 2rem' : '2rem 1.5rem',
       }}
     >
-      <h1 style={{ marginTop: 0, marginBottom: 6 }}>{title}</h1>
+      {/* The default h1 is 2em/32px, which wraps this title onto three lines on a phone and
+          pushes the actual choice below the fold. */}
+      <h1 style={{ marginTop: 0, marginBottom: 6, fontSize: phone ? '1.5rem' : undefined }}>
+        {title}
+      </h1>
       <p style={{ color: '#94a3b8', fontSize: 14, lineHeight: 1.6, marginTop: 0 }}>
         Il mazzo ha <strong>{DECK_SIZE} dadi</strong> e resta lo stesso per tutta la partita.
         Ogni mano ne peschi <strong>{HAND_SIZE} a caso</strong>: un dado speciale nel mazzo
@@ -126,6 +132,10 @@ export function DeckBuilder({
         style={{
           marginTop: 20,
           padding: '12px 22px',
+          // Full-width on a phone: this is the only way off this screen, and a 155px button
+          // floating at the left edge under a long scroll is easy to miss and easy to fat-finger.
+          width: phone ? '100%' : undefined,
+          minHeight: 48,
           borderRadius: 8,
           border: 'none',
           fontSize: 16,
