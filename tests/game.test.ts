@@ -44,16 +44,18 @@ function playPassiveHand(state: GameState, rng: Rng): GameState {
     [0, 1, 2].find((i) => !st.stolenCommonIndices.includes(i))!
   s = reducer(s, { type: 'STEAL', player: primary, commonIndex: freeIndex(s) }, rng)
   s = reducer(s, { type: 'STEAL', player: nonPrimary, commonIndex: freeIndex(s) }, rng)
-  expect(s.phase).toBe('REROLL_SELECT')
-
-  // REROLL_SELECT: primary first, then non-primary; both keep everything.
-  s = reducer(s, { type: 'REROLL', player: primary, ownIndices: [] }, rng)
-  s = reducer(s, { type: 'REROLL', player: nonPrimary, ownIndices: [] }, rng)
   expect(s.phase).toBe('SECOND_BET')
 
-  // SECOND_BET: primary opens at the first-bet amount, non-primary calls.
+  // SECOND_BET: primary opens at the first-bet amount, non-primary calls. This is BEFORE the
+  // reroll — you wager on the hand you were dealt, then decide what to throw away.
   s = reducer(s, { type: 'OPEN', player: primary, amount: s.firstBetAmount }, rng)
   s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
+  expect(s.phase).toBe('REROLL_SELECT')
+
+  // REROLL_SELECT: primary first, then non-primary; both keep everything. The dice are thrown
+  // once both have chosen, and the hand resolves from there.
+  s = reducer(s, { type: 'REROLL', player: primary, ownIndices: [] }, rng)
+  s = reducer(s, { type: 'REROLL', player: nonPrimary, ownIndices: [] }, rng)
   return s
 }
 
@@ -190,19 +192,19 @@ describe('a bet can never exceed the bankroll', () => {
     expect(s.bankroll.human).toBe(0)
     expect(s.bankroll.bot).toBe(0)
 
-    // Play through steal + reroll; the second betting round must not be offered.
+    // Steal; the second betting round must not be offered, so the reroll opens straight away.
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
+    expect(s.phase).not.toBe('SECOND_BET')
+    expect(s.phase).toBe('REROLL_SELECT')
+    expect(s.log.some((l) => /direttamente al rilancio/.test(l))).toBe(true)
+
+    // The skip must not skip the REROLL: a hand with no second betting round still gets its dice
+    // thrown, it simply gets them for no further money.
     s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
     s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
-
-    expect(s.phase).not.toBe('SECOND_BET')
-    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
-    expect(s.log.some((l) => /si tira e si va allo showdown/.test(l))).toBe(true)
-    // The skip must not skip the THROW: with the reroll now resolving after the betting, a hand
-    // that never gets a second betting round still has to have its chosen dice rolled before
-    // the comparison. This is the line that catches a shortcut jumping straight to the showdown.
     expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(true)
+    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
   })
 })
 
@@ -213,10 +215,9 @@ describe('fold (second round only, facing a bet)', () => {
     let s = rollOffUntilDecided(createInitialState(), rng)
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
     s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+    // The steal leads straight into the second betting round; the reroll is downstream of it.
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
     expect(s.phase).toBe('SECOND_BET')
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
     return { s, rng }
@@ -254,8 +255,6 @@ describe('fold (second round only, facing a bet)', () => {
     s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: otherPlayer(s.primary), commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: otherPlayer(s.primary), ownIndices: [] }, rng)
     expect(s.phase).toBe('SECOND_BET')
     // Nobody has opened yet, so the player to act has nothing to fold to.
     expect(() => reducer(s, { type: 'FOLD', player: s.toAct }, rng)).toThrow(/no bet to face/)
@@ -325,6 +324,9 @@ describe('reroll constraint (up to 4, stolen fixed)', () => {
     s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
     s = reducer(s, { type: 'STEAL', player: primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: nonPrimary, commonIndex: 1 }, rng)
+    // The betting round stands between the steal and the reroll; settle it at the minimum.
+    s = reducer(s, { type: 'OPEN', player: primary, amount: s.firstBetAmount }, rng)
+    s = reducer(s, { type: 'CALL', player: nonPrimary }, rng)
     expect(s.phase).toBe('REROLL_SELECT')
     return s
   }
@@ -454,69 +456,80 @@ describe('determinism', () => {
 })
 
 // ---------------------------------------------------------------------------
-// The second bet is a WAGER: the chosen dice are thrown only after it closes.
+// The whole reroll comes AFTER the second bet.
 //
-// This ordering is the point of the whole betting round, and it has regressed once already.
-// When the Mulinello was added the reroll moved earlier, to the end of REROLL_SELECT, so the
-// second bet ended up being placed with the final dice known. Since both hands are public in
-// this game that made the round a solved decision rather than a bet: the winner was already
-// determined, so the only correct plays were "fold every loss, raise every win". These tests
-// pin the ordering that stops that, in both directions — the dice must NOT be thrown before the
-// round, and they MUST be thrown after it.
+// This ordering is the point of the betting round, and it has regressed once already. When the
+// Mulinello was added the reroll moved earlier, so the second bet ended up being placed with the
+// final dice known. Since both hands are public in this game that made the round a solved
+// decision rather than a bet: the winner was already determined, so the only correct plays were
+// "fold every loss, raise every win" — measured at 400 hands out of 400. These tests pin the
+// order in both directions: nothing about the reroll may happen before the round, and the reroll
+// must happen once it closes.
 // ---------------------------------------------------------------------------
 
-describe('the second bet is placed before the dice are thrown', () => {
-  /** ROLL_OFF -> ... -> SECOND_BET, with `indices` selected for reroll by both seats. */
-  function playToSecondBet(state: GameState, rng: Rng, indices: readonly number[]): GameState {
+describe('the reroll comes after the second bet', () => {
+  /** ROLL_OFF -> INITIAL_BET -> STEAL, landing in SECOND_BET with both hands dealt. */
+  function playToSecondBet(state: GameState, rng: Rng): GameState {
     let s = rollOffUntilDecided(state, rng)
     const np = otherPlayer(s.primary)
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
     s = reducer(s, { type: 'CALL', player: np }, rng)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: indices }, rng)
-    s = reducer(s, { type: 'REROLL', player: np, ownIndices: indices }, rng)
-    expect(s.phase).toBe('SECOND_BET')
     return s
   }
 
-  it('records the selection but leaves the dice untouched until the round closes', () => {
+  it('opens the betting straight after the steal, with nothing rerolled or even chosen', () => {
     const rng = createRng(4242)
-    const s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
+    const s = playToSecondBet(createInitialState(), rng)
 
-    // The intent is on the state...
-    expect(s.hands.human.rerollSelection).toEqual([0, 1, 2, 3])
-    expect(s.hands.bot.rerollSelection).toEqual([0, 1, 2, 3])
-    // ...but nothing has been thrown, so the line that reports the thrown dice cannot exist yet.
+    expect(s.phase).toBe('SECOND_BET')
+    // No selection exists yet: the whole reroll is downstream of the wager.
+    expect(s.hands.human.rerollSelection).toBeNull()
+    expect(s.hands.bot.rerollSelection).toBeNull()
     expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(false)
   })
 
-  it('throws them once the round closes, and only then', () => {
+  it('rejects a reroll until the betting round has closed', () => {
     const rng = createRng(4243)
-    let s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
-    const before = s.hands.human.own!.map((d) => d.value)
+    const s = playToSecondBet(createInitialState(), rng)
+    expect(() =>
+      reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0] }, rng),
+    ).toThrow(/REROLL only allowed in REROLL_SELECT/)
+  })
+
+  it('opens the reroll once it closes, and throws the dice when both have chosen', () => {
+    const rng = createRng(4244)
+    let s = playToSecondBet(createInitialState(), rng)
+    const np = otherPlayer(s.primary)
 
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
-    // Still open: one seat has yet to answer, so the dice must still be as they were.
-    expect(s.phase).toBe('SECOND_BET')
+    expect(s.phase).toBe('SECOND_BET') // still open: one seat has yet to answer
+    s = reducer(s, { type: 'CALL', player: np }, rng)
+    expect(s.phase).toBe('REROLL_SELECT')
+
+    const before = s.hands.human.own!.map((d) => d.value)
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 1, 2, 3] }, rng)
+    // One seat in: nothing is thrown until both have chosen, so neither can react to the other.
+    expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(false)
     expect(s.hands.human.own!.map((d) => d.value)).toEqual(before)
 
-    s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+    s = reducer(s, { type: 'REROLL', player: np, ownIndices: [0, 1, 2, 3] }, rng)
     expect(s.log.some((l) => /^Dopo il rilancio/.test(l))).toBe(true)
     expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
   })
 
   it('leaves the outcome genuinely undecided at the moment of betting', () => {
     // THE anti-regression test, and the reason the ordering matters at all. Comparing the two
-    // hands on the table at the second bet must NOT reliably tell you who wins — otherwise the
-    // round is arithmetic, not a wager. Both seats reroll all four dice here, so the visible
-    // dice are nearly all about to be replaced; the leader should win barely more often than
-    // chance. (Measured at the old ordering this figure was 100%.)
+    // hands on the table when the bet is made must NOT reliably tell you who wins — otherwise the
+    // round is arithmetic, not a wager. Both seats reroll all four dice, which is what they are
+    // free to do at that point. (Measured with the old ordering, this figure was 100%.)
     let hands = 0
     let leaderWon = 0
     for (let seed = 1; seed <= 150; seed++) {
       const rng = createRng(seed)
-      let s = playToSecondBet(createInitialState(), rng, [0, 1, 2, 3])
+      let s = playToSecondBet(createInitialState(), rng)
+      const np = otherPlayer(s.primary)
       const score = (seat: PlayerId): number => {
         const h = s.hands[seat]
         return h.own!.reduce((sum, d) => sum + d.value, 0) + h.stolen!.value
@@ -524,7 +537,10 @@ describe('the second bet is placed before the dice are thrown', () => {
       const leader: PlayerId = score('human') >= score('bot') ? 'human' : 'bot'
 
       s = reducer(s, { type: 'OPEN', player: s.primary, amount: MIN }, rng)
-      s = reducer(s, { type: 'CALL', player: otherPlayer(s.primary) }, rng)
+      s = reducer(s, { type: 'CALL', player: np }, rng)
+      s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [0, 1, 2, 3] }, rng)
+      s = reducer(s, { type: 'REROLL', player: np, ownIndices: [0, 1, 2, 3] }, rng)
+
       const outcome = s.lastShowdown?.outcome
       if (outcome === undefined || outcome.kind !== 'win') {
         continue
@@ -533,7 +549,7 @@ describe('the second bet is placed before the dice are thrown', () => {
       if (outcome.winner === leader) leaderWon++
     }
     expect(hands).toBeGreaterThan(80)
-    // Comfortably below certainty: the pre-throw leader is not the winner.
+    // Comfortably below certainty: the hand you bet on is not the hand that wins.
     expect(leaderWon / hands).toBeLessThan(0.8)
   })
 })

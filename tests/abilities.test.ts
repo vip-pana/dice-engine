@@ -145,12 +145,9 @@ describe('DADO_PAGURO: rolls 3, the player keeps one, blind', () => {
   ): ReturnType<typeof createInitialState> {
     let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(start.primary), commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, other(s.primary), []), rng)
-    if (s.phase === 'SECOND_BET') {
-      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
-    }
     return s
   }
 
@@ -380,10 +377,9 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
     state = reducer(state, { type: 'STEAL', player: other(state.primary), commonIndex: 1 }, rng)
     const keptValue = state.hands.human.own![hidden]!.value
 
+    state = settleSecondBet(state, rng)
     state = reducer(state, { type: 'REROLL', player: state.primary, ownIndices: [] }, rng)
     state = reducer(state, { type: 'REROLL', player: other(state.primary), ownIndices: [] }, rng)
-    state = reducer(state, { type: 'OPEN', player: state.primary, amount: 10 }, rng)
-    state = reducer(state, { type: 'CALL', player: other(state.primary) }, rng)
 
     expect(state.lastShowdown).not.toBeNull()
     // The evaluated hand contains the once-hidden face.
@@ -397,10 +393,9 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
 
     state = reducer(state, { type: 'STEAL', player: state.primary, commonIndex: 0 }, rng)
     state = reducer(state, { type: 'STEAL', player: other(state.primary), commonIndex: 1 }, rng)
+    state = settleSecondBet(state, rng)
     state = reducer(state, { type: 'REROLL', player: state.primary, ownIndices: [] }, rng)
     state = reducer(state, { type: 'REROLL', player: other(state.primary), ownIndices: [] }, rng)
-    state = reducer(state, { type: 'OPEN', player: state.primary, amount: 10 }, rng)
-    state = reducer(state, { type: 'CALL', player: other(state.primary) }, rng)
 
     expect(state.hands.human.concealedIndices).toHaveLength(0)
     // And the view no longer masks anything.
@@ -415,6 +410,7 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
     state = reducer(state, { type: 'STEAL', player: state.primary, commonIndex: 0 }, rng)
     state = reducer(state, { type: 'STEAL', player: other(state.primary), commonIndex: 1 }, rng)
     // The human rerolls the very die they cannot see.
+    state = settleSecondBet(state, rng)
     state = reducer(state, { type: 'REROLL', player: 'human', ownIndices: [hidden] }, rng)
     state = reducer(
       state,
@@ -422,10 +418,6 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
       rng,
     )
     // Still hidden while the hand is live (SECOND_BET), not revealed by the reroll.
-    if (state.phase === 'SECOND_BET') {
-      expect(state.hands.human.concealedIndices).toContain(hidden)
-      expect(viewFor(state, 'human').hands.human.own![hidden]!.concealed).toBe(true)
-    }
   })
 
   // --- Common (unowned) Nero di Seppia ---
@@ -499,10 +491,9 @@ describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
     expect(state.hands.human.concealedIndices).toHaveLength(1)
     expect(state.hands.bot.concealedIndices).toHaveLength(1)
 
+    state = settleSecondBet(state, rng)
     state = reducer(state, { type: 'REROLL', player: state.primary, ownIndices: [] }, rng)
     state = reducer(state, { type: 'REROLL', player: other(state.primary), ownIndices: [] }, rng)
-    state = reducer(state, { type: 'OPEN', player: state.primary, amount: 10 }, rng)
-    state = reducer(state, { type: 'CALL', player: other(state.primary) }, rng)
 
     // The showdown still reveals everything.
     expect(state.hands.human.concealedIndices).toHaveLength(0)
@@ -680,12 +671,10 @@ describe('loadouts in the match state', () => {
     state = reducer(state, { type: 'STEAL', player: state.primary, commonIndex: 0 }, rng)
     state = reducer(state, { type: 'STEAL', player: other(state.primary), commonIndex: 1 }, rng)
 
+    state = settleSecondBet(state, rng)
     state = reducer(state, { type: 'REROLL', player: state.primary, ownIndices: [0] }, rng)
     state = reducer(state, { type: 'REROLL', player: other(state.primary), ownIndices: [0] }, rng)
 
-    // Second betting round -> showdown applies the rerolls.
-    state = reducer(state, { type: 'OPEN', player: state.primary, amount: 10 }, rng)
-    state = reducer(state, { type: 'CALL', player: other(state.primary) }, rng)
 
     expect(state.lastShowdown).not.toBeNull()
     const own = state.hands.human.own!
@@ -993,12 +982,11 @@ function playHandToCompletion(
   let s = state
   s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
   s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+  s = settleSecondBet(s, rng)
   s = reducer(s, rerollAction(s, s.primary, []), rng)
   s = reducer(s, rerollAction(s, other(s.primary), []), rng)
   // The second bet comes BEFORE the dice are thrown, so it is settled first; the reroll then
   // resolves and any Mulinello/Paguro decision follows it.
-  s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-  s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
   s = passMulinelli(s, rng)
   s = choosePaguri(s, rng)
   return s
@@ -1130,8 +1118,8 @@ describe("DADO_D_ORO: doubles the winner's payout", () => {
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: steals[0] }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: steals[1] }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: np, ownIndices: [] }, rng)
+    // The betting round sits between the steal and the reroll, so the pot is complete before any
+    // die is thrown: open here, snapshot, and let the call close the round.
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
 
     const before = s
@@ -1141,6 +1129,9 @@ describe("DADO_D_ORO: doubles the winner's payout", () => {
     )
     const pot = before.pot + paidOnCall
     s = reducer(s, { type: 'CALL', player: np }, rng)
+    // Closing the betting opens the reroll; the payout lands at the showdown after the throw.
+    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
+    s = reducer(s, { type: 'REROLL', player: np, ownIndices: [] }, rng)
     expect(s.phase === 'HAND_COMPLETE' || s.phase === 'MATCH_OVER').toBe(true)
     const after = s
 
@@ -1262,8 +1253,8 @@ describe("DADO_D_ORO: doubles the winner's payout", () => {
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
-    s = reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [] }, rng)
-    s = reducer(s, { type: 'REROLL', player: np, ownIndices: [] }, rng)
+    // The fold lives in SECOND_BET, which now comes before the reroll: a hand can be conceded
+    // without a single die ever being thrown.
     expect(s.phase).toBe('SECOND_BET')
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: 20 }, rng)
 
@@ -1365,10 +1356,9 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
     const before = { human: [...s.hands.human.own!], bot: [...s.hands.bot.own!] }
     const keep = opts.rerollAll === true ? [0, 1, 2, 3] : []
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, keep, opts.target ?? 0), rng)
     s = reducer(s, rerollAction(s, np, keep, opts.target ?? 0), rng)
-    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-    s = reducer(s, { type: 'CALL', player: np }, rng)
     return { before, after: s }
   }
 
@@ -1447,11 +1437,14 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     const np = other(s.primary)
     let t = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     t = reducer(t, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    // The reroll's validation only applies once the betting round has closed.
+    t = settleSecondBet(t, rng)
     const first = t.toAct
     if (first === 'human') {
       expect(() => reducer(t, { type: 'REROLL', player: 'human', ownIndices: [] }, rng)).toThrow(
         /must choose a target/,
       )
+      t = settleSecondBet(t, rng)
       expect(() =>
         reducer(t, { type: 'REROLL', player: 'human', ownIndices: [], torpedoTarget: 4 }, rng),
       ).toThrow(/0\.\.3/)
@@ -1464,6 +1457,7 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     const np = other(s.primary)
     let t = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     t = reducer(t, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    t = settleSecondBet(t, rng)
     expect(() =>
       reducer(t, { type: 'REROLL', player: t.toAct, ownIndices: [], torpedoTarget: 0 }, rng),
     ).toThrow(/only a Dado Torpedo holder/)
@@ -1498,10 +1492,9 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: plain[1]! }, rng)
     const beforeHuman = ownSum(s, 'human')
     const beforeBot = ownSum(s, 'bot')
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, np, []), rng)
-    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-    s = reducer(s, { type: 'CALL', player: np }, rng)
 
     // Nobody owns it, so nobody chose — but both lose a point (unless the die was already 1).
     const lines = s.log.filter((l) => /Dado Torpedo tra i comuni/.test(l))
@@ -1527,13 +1520,9 @@ describe('DADO_TORPEDO: zaps a chosen opponent die at the showdown', () => {
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
-    s = reducer(s, rerollAction(s, s.primary, [], 0), rng)
-    s = reducer(s, rerollAction(s, np, [], 0), rng)
+    // A fold ends the hand from SECOND_BET, which sits BEFORE the reroll — so on a conceded hand
+    // no die is ever thrown and no zap is ever applied. Both are checked below.
     expect(s.phase).toBe('SECOND_BET')
-    // Snapshot AFTER the reroll has resolved. The reroll now lands at the end of
-    // REROLL_SELECT rather than at the showdown, so "the dice did not move" no longer
-    // distinguishes a fold from a showdown — what a fold still guarantees is that no zap
-    // lands, since the -1 is applied by goToShowdown and a fold never gets there.
     const beforeHuman = ownSum(s, 'human')
     const beforeBot = ownSum(s, 'bot')
     s = reducer(s, { type: 'OPEN', player: s.primary, amount: 20 }, rng)
@@ -1627,12 +1616,9 @@ describe('MULINELLO: an optional third roll, chosen after seeing the second', ()
     const np = other(start.primary)
     let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, np, []), rng)
-    if (s.phase === 'SECOND_BET') {
-      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
-    }
     return s
   }
 
@@ -1757,9 +1743,9 @@ describe('MULINELLO: an optional third roll, chosen after seeing the second', ()
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: at === 0 ? 1 : 0 }, rng)
     expect(s.hands[s.primary].stolen!.ability).toBe('MULINELLO')
 
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, np, []), rng)
-    s = settleSecondBet(s, rng)
     expect(s.phase).toBe('MULINELLO_SELECT')
 
     const ownBefore = s.hands[s.primary].own!.map((d) => d.value)
@@ -1788,10 +1774,12 @@ describe('MULINELLO: an optional third roll, chosen after seeing the second', ()
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: others[1]! }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, np, []), rng)
 
-    expect(s.phase).toBe('SECOND_BET')
+    // Nobody owns it, so no Mulinello phase ever opens and the hand runs to its end.
+    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
     expect(s.log.some((l) => /Mulinello/.test(l))).toBe(false)
   })
 
@@ -1809,10 +1797,10 @@ describe('MULINELLO: an optional third roll, chosen after seeing the second', ()
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
     // The bot aims at the human's slot 0 — the very die the Mulinello can roll again.
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, [], 0), rng)
     s = reducer(s, rerollAction(s, np, [], 0), rng)
     // The betting is settled first now, which is what throws the dice and opens the Mulinello.
-    s = settleSecondBet(s, rng)
 
     s = reducer(s, { type: 'MULINELLO_ROLL', player: 'human' }, rng)
 
@@ -1859,13 +1847,9 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
   const SPUGNA_ONLY: Loadout = ['DADO_SPUGNA', null, null, null]
   const TORPEDO: Loadout = ['DADO_TORPEDO', null, null, null]
 
-  /** Sum of a seat's 4 own-dice values. */
-  const ownSum = (s: ReturnType<typeof createInitialState>, seat: 'human' | 'bot'): number =>
-    s.hands[seat].own!.reduce((n, d) => n + d.value, 0)
-
   /**
-   * STEAL -> both seats keep everything, `player` sponging `target`. Stops wherever the phase
-   * machine lands, so callers can assert on MULINELLO_SELECT vs SECOND_BET.
+   * STEAL -> settle the betting -> both seats keep everything, `player` sponging `target`. Stops
+   * wherever the phase machine lands, so callers can assert on MULINELLO_SELECT vs a resolved hand.
    */
   function playToSponge(
     start: ReturnType<typeof createInitialState>,
@@ -1879,6 +1863,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: steals[1] }, rng)
     for (const seat of [s.primary, np] as const) {
       const base = rerollAction(s, seat, [])
+      s = settleSecondBet(s, rng)
       s = reducer(s, seat === player ? { ...base, spongeTarget: target } : base, rng)
     }
     return s
@@ -1903,16 +1888,15 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
       createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
       rng,
     )
-    let s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
-    const before = ownSum(s, 'human')
-    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-    s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+    const s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
 
     // Anchored: the absorb line itself contains "il Dado Torpedo di", so a loose match would
     // find the very message that proves the zap did NOT happen.
     expect(s.log.some((l) => /^Dado Torpedo di/.test(l))).toBe(false)
     expect(s.log.some((l) => /Dado Spugna di .*è assorbito/.test(l))).toBe(true)
-    expect(ownSum(s, 'human')).toBe(before)
+    // No before/after dice comparison: the throw and the showdown that would apply the zap now
+    // land in the same reducer step, so there is no state between them to snapshot. The absence
+    // of the zap line above is the proof, and it is the stronger one — a zap cannot be silent.
   })
 
   it('consumes the same rng draws whether or not the Torpedo is sponged', () => {
@@ -1937,11 +1921,11 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
         createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
         rng,
       )
-      let s = sponge
-        ? playToSponge(start, rng, 'human', 'DADO_TORPEDO')
-        : playToSponge(start, rng, 'human', 'DADO_D_ORO')
-      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-      reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+      if (sponge) {
+        playToSponge(start, rng, 'human', 'DADO_TORPEDO')
+      } else {
+        playToSponge(start, rng, 'human', 'DADO_D_ORO')
+      }
       return counts
     }
     const sponged = counted(true)
@@ -1964,16 +1948,13 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     // Both seats steal something else, so the Torpedo stays on the table and hits both.
     const others = [0, 1, 2].filter((i) => i !== at)
     s = playToSponge(s, rng, 'human', 'DADO_TORPEDO', [others[0]!, others[1]!])
-    const beforeHuman = ownSum(s, 'human')
-    const beforeBot = ownSum(s, 'bot')
-    s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-    s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
 
     // The human is spared; the bot is not.
     expect(s.log.some((l) => /Dado Spugna di Tu: il Dado Torpedo tra i comuni/.test(l))).toBe(true)
-    expect(ownSum(s, 'human')).toBe(beforeHuman)
-    expect(ownSum(s, 'bot')).toBeLessThanOrEqual(beforeBot)
+    // Asserted through the log rather than a dice snapshot, for the reason given above: the bot
+    // gets a zap line naming it, and the human gets none. A zap is never silent.
     expect(s.log.some((l) => /Dado Torpedo tra i comuni: il dado \d+ di Bot/.test(l))).toBe(true)
+    expect(s.log.some((l) => /Dado Torpedo tra i comuni: il dado \d+ di Tu/.test(l))).toBe(false)
   })
 
   it('cancels a held Dado d\'Oro: the winner collects the pot once', () => {
@@ -1986,11 +1967,19 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
         createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: ['DADO_D_ORO', null, null, null] } }),
         rng,
       )
-      let s = playToSponge(start, rng, 'human', 'DADO_D_ORO')
+      // Driven by hand rather than through playToSponge: the pot has to be snapshotted after the
+      // betting closes but BEFORE the reroll resolves the hand and pays it out.
+      const np = other(start.primary)
+      let s = reducer(start, { type: 'STEAL', player: start.primary, commonIndex: 0 }, rng)
+      s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
       s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
+      s = reducer(s, { type: 'CALL', player: np }, rng)
       const beforeBot = s.bankroll.bot
       const potBefore = s.pot
-      s = reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+      for (const seat of [s.primary, np] as const) {
+        const base = rerollAction(s, seat, [])
+        s = reducer(s, seat === 'human' ? { ...base, spongeTarget: 'DADO_D_ORO' } : base, rng)
+      }
       if (s.lastShowdown?.outcome.kind !== 'win' || s.lastShowdown.outcome.winner !== 'bot') {
         continue
       }
@@ -2009,8 +1998,11 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
       createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: ['MULINELLO', null, null, null] } }),
       rng,
     )
+    // The bot's only Mulinello is sponged, so its phase never opens and the hand resolves
+    // straight out of the reroll.
     const s = playToSponge(start, rng, 'human', 'MULINELLO')
-    expect(s.phase).toBe('SECOND_BET')
+    expect(s.phase).not.toBe('MULINELLO_SELECT')
+    expect(['HAND_COMPLETE', 'MATCH_OVER']).toContain(s.phase)
   })
 
   it('with two Mulinelli and one sponged, the phase still opens for the other', () => {
@@ -2074,6 +2066,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     )
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     expect(() =>
       reducer(
         s,
@@ -2089,6 +2082,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
     for (const id of ['STELLA_ESSICCATA', 'D4'] as const) {
+      s = settleSecondBet(s, rng)
       expect(() =>
         reducer(s, { type: 'REROLL', player: s.primary, ownIndices: [], spongeTarget: id }, rng),
       ).toThrow(/cannot be absorbed/)
@@ -2118,6 +2112,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: others[1]! }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, { ...rerollAction(s, s.primary, []), spongeTarget: 'MULINELLO' }, rng)
     s = reducer(s, rerollAction(s, np, []), rng)
     expect(s.hands[s.primary].spongeTarget).toBeNull()
@@ -2147,6 +2142,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
         : reducer(s, { type: 'STEAL', player: 'human', commonIndex: at }, rng)
     expect(s.hands.human.stolen!.ability).toBe('DADO_SPUGNA')
 
+    s = settleSecondBet(s, rng)
     for (const seat of [s.primary, np] as const) {
       const base = rerollAction(s, seat, [])
       s = reducer(s, seat === 'human' ? { ...base, spongeTarget: 'DADO_TORPEDO' } : base, rng)
@@ -2161,9 +2157,7 @@ describe('DADO_SPUGNA: soaks up one opponent ability', () => {
         createInitialState({ loadouts: { human: SPUGNA_ONLY, bot: TORPEDO } }),
         rng,
       )
-      let s = playToSponge(start, rng, 'human', 'DADO_TORPEDO')
-      s = reducer(s, { type: 'OPEN', player: s.primary, amount: 10 }, rng)
-      return reducer(s, { type: 'CALL', player: other(s.primary) }, rng)
+      return playToSponge(start, rng, 'human', 'DADO_TORPEDO')
     }
     expect(run().log).toEqual(run().log)
   })
@@ -2227,15 +2221,15 @@ describe('DADO_LANTERNA: one peek at the opponent deck, once per hand', () => {
     const np = other(s.primary)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+    expect(s.phase).toBe('SECOND_BET')
+    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
+
+    s = settleSecondBet(s, rng)
     expect(s.phase).toBe('REROLL_SELECT')
     expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
 
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, np, []), rng)
-    expect(s.phase).toBe('SECOND_BET')
-    expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
-
-    s = settleSecondBet(s, rng)
     expect(s.phase).toBe('MULINELLO_SELECT')
     expect(reducer(s, peek('human'), rng).hands.human.lanternaUsed).toBe(true)
   })
@@ -2312,6 +2306,7 @@ describe('DADO_LANTERNA: one peek at the opponent deck, once per hand', () => {
       const np = other(s.primary)
       s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
       s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
+      s = settleSecondBet(s, rng)
       s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
       s = reducer(s, rerollAction(s, np, [0, 1, 2, 3]), rng)
       return [
@@ -2338,6 +2333,7 @@ describe('DADO_LANTERNA: one peek at the opponent deck, once per hand', () => {
     )
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     expect(() =>
       reducer(
         s,
@@ -2534,6 +2530,7 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
     let s = playToSteal(createInitialState({ loadouts: { bot: BRUMEGGIO_ONLY } }), rng)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
     s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
     for (const die of s.hands.human.own!) {
@@ -2560,10 +2557,10 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
     const victim = other(thief)
     s = reducer(s, { type: 'STEAL', player: thief, commonIndex: index }, rng)
     s = reducer(s, { type: 'STEAL', player: victim, commonIndex: index === 0 ? 1 : 0 }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
     s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
     // The dice are thrown when the second bet closes, so the fog is only observable after it.
-    s = settleSecondBet(s, rng)
 
     for (const die of s.hands[victim].own!) {
       expect(looksFogged(die)).toBe(true)
@@ -2582,6 +2579,7 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
     const others = [0, 1, 2].filter((i) => i !== index)
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: others[0]! }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: others[1]! }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, [0, 1, 2, 3]), rng)
     s = reducer(s, rerollAction(s, other(s.primary), [0, 1, 2, 3]), rng)
     for (const seat of ['human', 'bot'] as const) {
@@ -2606,6 +2604,7 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
     s = reducer(s, { type: 'STEAL', player: np, commonIndex: 1 }, rng)
     for (const seat of [s.primary, np] as const) {
       const base = rerollAction(s, seat, indices)
+      s = settleSecondBet(s, rng)
       s = reducer(s, seat === player ? { ...base, spongeTarget: target } : base, rng)
     }
     // Settling the betting is what THROWS the selected dice — and therefore the only point at
@@ -2683,9 +2682,9 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
     )
     s = reducer(s, { type: 'STEAL', player: s.primary, commonIndex: 0 }, rng)
     s = reducer(s, { type: 'STEAL', player: other(s.primary), commonIndex: 1 }, rng)
+    s = settleSecondBet(s, rng)
     s = reducer(s, rerollAction(s, s.primary, []), rng)
     s = reducer(s, rerollAction(s, other(s.primary), []), rng)
-    s = settleSecondBet(s, rng)
     expect(s.phase).toBe('MULINELLO_SELECT')
     while (s.phase === 'MULINELLO_SELECT') {
       s =

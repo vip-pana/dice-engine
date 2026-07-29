@@ -1210,26 +1210,6 @@ function useDieSize(): number {
   return useIsPhone() ? DIE_SIZE.phone : DIE_SIZE.default
 }
 
-const NO_PENDING: ReadonlySet<number> = new Set()
-
-/**
- * Own-dice indices whose reroll is chosen but NOT yet thrown.
- *
- * Only during SECOND_BET, and that gate is the whole point: the reroll is selected in
- * REROLL_SELECT, wagered on during SECOND_BET and thrown when that round closes. In between, the
- * faces on screen are about to be replaced, and a table that showed them as ordinary dice would
- * be inviting the player to bet on numbers that are already on their way out.
- *
- * `rerollSelection` stays on the state after the throw as the record of what was asked for, so
- * reading it without the phase check would keep marking dice that have long since landed.
- */
-function pendingRerollSet(state: GameState, hand: PlayerHandState): ReadonlySet<number> {
-  if (state.phase !== 'SECOND_BET') {
-    return NO_PENDING
-  }
-  return new Set(hand.rerollSelection ?? [])
-}
-
 function RollOffView({ state }: { state: GameState }): JSX.Element | null {
   const dieSize = useDieSize()
 
@@ -1343,7 +1323,6 @@ function BotRow({
   const live = liveFinalHand(hand) // reuse: own4 + stolen -> Hand, if formed
   const phone = useIsPhone()
   const dieSize = useDieSize()
-  const pending = pendingRerollSet(state, hand)
   return (
     <div style={diceRowStyle(phone)}>
       {hand.own === null ? (
@@ -1360,13 +1339,7 @@ function BotRow({
               // Only the 4 own dice are targetable — the stolen die is fixed, as everywhere
               // else in the game.
               selected={aiming && torpedoTarget === i}
-              // A die awaiting its reroll says so, ahead of the Torpedo marker: which faces are
-              // about to be replaced is the more urgent fact while a bet is on the table, and the
-              // aim is already in the log. Dimmed too — this value is on its way out.
-              dimmed={pending.has(i)}
-              caption={
-                pending.has(i) ? 'da rilanciare' : torpedoTarget === i ? 'bersaglio ⚡' : undefined
-              }
+              caption={torpedoTarget === i ? 'bersaglio ⚡' : undefined}
               size={dieSize}
               onClick={aiming && onAim !== undefined ? () => onAim(i) : undefined}
             />
@@ -1387,14 +1360,7 @@ function BotRow({
           ) : (
             <Placeholder text="dado rubato" />
           )}
-          {live &&
-            (pending.size > 0 ? (
-              // Not `live`: with a reroll still pending this is the hand as it stands, not the
-              // hand that will be compared, and a teal "Mano attuale" badge would read as final.
-              <HandBadge label={`Prima del rilancio: ${categoryLabel(evaluateHand(live))}`} ownLine={phone} />
-            ) : (
-              <HandBadge label={categoryLabel(evaluateHand(live))} live ownLine={phone} />
-            ))}
+          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live ownLine={phone} />}
         </>
       )}
     </div>
@@ -1424,7 +1390,6 @@ function HumanRow({
   const spongeChoices = spongeableThreats(state)
   const phone = useIsPhone()
   const dieSize = useDieSize()
-  const pending = pendingRerollSet(state, hand)
 
   // Reset selection whenever we (re)enter selection for a new hand.
   useEffect(() => {
@@ -1474,17 +1439,12 @@ function HumanRow({
             selected={
               (selecting && selected.includes(i)) || i === mulinelloIndex || i === paguroIndex
             }
-            // Your own pending dice are marked the same way as the bot's: you are betting with
-            // these faces on their way out, and that has to be visible while you choose an amount.
-            dimmed={pending.has(i)}
             caption={
-              pending.has(i)
-                ? 'da rilanciare'
-                : i === mulinelloIndex
-                  ? `ritirabile ${abilitySpec('MULINELLO')?.icon}`
-                  : i === paguroIndex
-                    ? `scegli al buio ${abilitySpec('DADO_PAGURO')?.icon}`
-                    : undefined
+              i === mulinelloIndex
+                ? `ritirabile ${abilitySpec('MULINELLO')?.icon}`
+                : i === paguroIndex
+                  ? `scegli al buio ${abilitySpec('DADO_PAGURO')?.icon}`
+                  : undefined
             }
             size={dieSize}
             onClick={selecting ? () => toggle(i) : undefined}
@@ -1506,13 +1466,6 @@ function HumanRow({
             // One die is unknown, so the category is unknowable: showing the one computed
             // from the placeholder would be a confident lie.
             <HandBadge label="Mano incerta — un dado è nascosto" live ownLine={phone} />
-          ) : pending.size > 0 ? (
-            // Same reasoning as the bot's row: with dice still to be thrown this is not the hand
-            // that will be compared, so it must not wear the live badge.
-            <HandBadge
-              label={`Prima del rilancio: ${categoryLabel(evaluateHand(liveHand))}`}
-              ownLine={phone}
-            />
           ) : (
             <HandBadge label={categoryLabel(evaluateHand(liveHand))} live ownLine={phone} />
           ))}
@@ -1786,19 +1739,14 @@ function BettingControls({
 
   const owed = state.currentBet - state.hands.human.committed
   const rowStyle = { display: 'flex', gap: 10, marginTop: 16, alignItems: 'center', flexWrap: 'wrap' as const }
-  // How many of your dice are still to be thrown. Stated plainly next to the amount, because it
-  // is the single fact that decides how much this bet is worth risking.
-  const stillToThrow = pendingRerollSet(state, state.hands.human).size
-
   return (
     <div style={rowStyle}>
-      {stillToThrow > 0 && (
+      {state.phase === 'SECOND_BET' && (
+        // The one fact that decides how much this bet is worth risking: the reroll is still
+        // entirely ahead of you, so these five dice are a starting point, not a result.
         <span style={{ flexBasis: '100%', fontSize: 13, color: '#fbbf24' }}>
-          Punti <strong>prima</strong> di tirare:{' '}
-          {stillToThrow === 1
-            ? '1 tuo dado verrà rilanciato'
-            : `${stillToThrow} tuoi dadi verranno rilanciati`}{' '}
-          dopo la scommessa.
+          Punti <strong>prima</strong> del rilancio: dopo la scommessa potrai ritirare fino a 4
+          dei tuoi dadi.
         </span>
       )}
       {!isOpening && (

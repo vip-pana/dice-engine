@@ -34,11 +34,10 @@ export function otherPlayer(p: PlayerId): PlayerId {
  *  ROLL_OFF         -> both players roll one die; highest becomes primary (tie -> re-roll)
  *  INITIAL_BET      -> primary opens with a free amount; opponent must see/raise (no fold)
  *  STEAL            -> primary steals a common die first, then non-primary (exclusive)
+ *  SECOND_BET       -> primary bets >= first bet; opponent see/raise/fold. Placed on the hand as
+ *                      dealt, with the whole reroll still ahead — a wager, not a calculation.
  *  REROLL_SELECT    -> each player picks which own dice to reroll (up to 4; stolen fixed).
- *                      Only the CHOICE is recorded here; the dice are not thrown yet.
- *  SECOND_BET       -> primary bets >= first bet; opponent see/raise/fold. Placed with the
- *                      reroll still pending, so it is a wager and not a calculation.
- *  (reroll resolves) -> both seats' chosen dice are thrown, in one step
+ *                      Both seats' chosen dice are thrown as soon as both have chosen.
  *  MULINELLO_SELECT -> SKIPPED unless a seat holds a Mulinello: that seat, having seen the
  *                      reroll, chooses whether to roll that one die a third time
  *  PAGURO_SELECT    -> SKIPPED unless a seat holds a Dado Paguro: that seat picks, BLIND, which
@@ -55,29 +54,34 @@ export function otherPlayer(p: PlayerId): PlayerId {
  * that appeared in every hand would make every existing caller pay for an ability it is not
  * using.
  *
- * WHY THE REROLL RESOLVES AFTER THE SECOND BET, and not before it.
+ * WHY THE WHOLE REROLL COMES AFTER THE SECOND BET, and not before it.
  *
- * It used to resolve at the end of REROLL_SELECT, so the second bet was placed with the final
- * dice known. That was accepted as the price of the Mulinello, whose decision needs the result
- * to exist — but the price was far higher than it looked. Both hands are public in this game, so
+ * The reroll used to sit in front of the betting, so the second bet was placed with the final
+ * dice known. That was accepted as the price of the Mulinello, whose decision needs a result to
+ * exist — but the price was far higher than it looked. Both hands are public in this game, so
  * with the dice final the winner was already determined at the second bet: a solved decision,
- * where the only correct plays are "fold every loss, raise every win". Measured over 400 hands,
- * the outcome was predictable from the table 400 times. A betting round nobody can be wrong in
- * is not a betting round.
+ * where the only correct plays are "fold every loss, raise every win", and the fold is legal in
+ * exactly that round. Measured over 400 hands, the outcome was predictable from the table 400
+ * times. A betting round nobody can be wrong in is not a betting round.
  *
- * So the throw moved AFTER the bet, and the two abilities that need a result to look at moved
- * after the throw. They still work exactly as specified — the Mulinello still sees its face
- * before deciding on a third roll — they simply no longer inform the wager. What they lose is
- * betting leverage; what the hand regains is a second bet that is a bet.
+ * So the betting moved ahead of the reroll entirely — choice and throw together, downstream of
+ * the wager — and the two abilities that need a result to look at follow the throw. They still
+ * work exactly as specified (the Mulinello still sees its face before deciding on a third roll);
+ * they simply no longer inform the wager. What they lose is betting leverage; what the hand
+ * regains is a second bet that is a bet.
+ *
+ * A visible consequence, and a welcome one: a fold now ends the hand before any die is thrown,
+ * so conceding means never learning what you would have rolled.
  */
+// Listed in the order a hand runs through them, which is also the order documented above.
 export type Phase =
   | 'ROLL_OFF'
   | 'INITIAL_BET'
   | 'STEAL'
+  | 'SECOND_BET'
   | 'REROLL_SELECT'
   | 'MULINELLO_SELECT'
   | 'PAGURO_SELECT'
-  | 'SECOND_BET'
   | 'SHOWDOWN'
   | 'HAND_COMPLETE'
   | 'MATCH_OVER'
@@ -111,13 +115,14 @@ export interface PlayerHandState {
   /** Chips this player has committed to the pot in the current hand. */
   readonly committed: number
   /**
-   * Chosen own-dice indices to reroll. Recorded during REROLL_SELECT; the dice are thrown once
-   * the SECOND BET has closed, so between those two points this field is a PENDING intent and
-   * the values in `own` are not yet final. Null until chosen.
+   * Chosen own-dice indices to reroll. Recorded during REROLL_SELECT, and applied as soon as BOTH
+   * seats have chosen — so the choice and the throw belong to the same phase, with no betting
+   * round between them. Null until chosen.
    *
-   * That gap is deliberate and is what makes the second bet a wager — see the Phase docs above.
-   * Anything reading `own` during SECOND_BET (the UI's live hand badge, the bot's betting
-   * heuristic) has to account for this selection rather than treating the dice as settled.
+   * Still null throughout SECOND_BET, which is the point: a seat wagers before it has committed
+   * to anything about the reroll. The bot's betting heuristic therefore prices the BEST reroll
+   * still available to it (see prospectiveStrength in bot.ts) rather than a selection that does
+   * not exist yet. Kept afterwards as the record of what was asked for.
    */
   readonly rerollSelection: readonly number[] | null
   /**

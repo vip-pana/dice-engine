@@ -11,7 +11,7 @@ import {
   chooseTorpedoTarget,
   handScore,
 } from './strategy'
-import { exactRerollEV } from './optimal'
+import { exactRerollEV, optimalReroll } from './optimal'
 import type { Rng } from './rng'
 import type { AbilityId, Hand } from './types'
 import type { Action } from './actions'
@@ -367,28 +367,35 @@ function choosePaguro(_state: GameState, player: PlayerId, rng: Rng): Action {
   return { type: 'PAGURO_CHOOSE', player, index: rng.nextInt(0, 2) }
 }
 
-// --- SECOND_BET: threshold on the strength this hand is EXPECTED to end up with ---
+// --- SECOND_BET: threshold on the strength this hand can still REACH after its reroll ---
 
 /**
- * Normalized strength to bet on at the second bet, accounting for the reroll still pending.
+ * Normalized strength to bet on at the second bet — the strength this hand can still REACH.
  *
- * The dice on the table are not this hand's final dice: the reroll selection was made in
- * REROLL_SELECT but is thrown only once this betting round closes. Pricing the visible dice
- * would misread every hand that chose to reroll — worst of all the good ones, since a seat
- * that kept everything and a seat that is about to replace three dice would score identically.
+ * The dice on the table are not what this hand will be compared with: the whole reroll comes
+ * after this betting round, so every seat still has four dice it may replace. Pricing the visible
+ * faces would systematically undervalue a bad hand, which is exactly the hand a reroll helps
+ * most: a busted 1-2-4-6 that can throw all four away is not worth what its faces say.
  *
- * `exactRerollEV` enumerates all 6^k outcomes of the pending dice, which is the same exact
- * arithmetic the solver and chooseMulinello already use, so the bot cannot drift away from them.
- * Its documented blind spots are inherited unchanged: it assumes a uniform 1..6 face, so a
- * pending Stella, D4 or Paguro — or any die rolled in a Brumeggio's fog — is mispriced.
+ * `optimalReroll` searches every legal keep-set and returns the best expected handScore, computed
+ * exactly by enumerating all 6^k outcomes. Same arithmetic the solver and chooseMulinello use, so
+ * the bot cannot drift away from them, and the same documented blind spots are inherited: it
+ * assumes a uniform 1..6 face, so a Stella, a D4 or a Paguro among the dice — and any die rolled
+ * in a Brumeggio's fog — is mispriced.
+ *
+ * The `rerollSelection` branch is for the case where a selection somehow already exists (it does
+ * not in the current phase order): then the choice is made and only THAT reroll should be priced.
  */
-function pendingStrength(state: GameState, player: PlayerId, hand: Hand): number {
+function prospectiveStrength(state: GameState, player: PlayerId, hand: Hand): number {
   const h = state.hands[player]
-  const pending = h.rerollSelection ?? []
-  if (h.own === null || h.stolen === null || pending.length === 0) {
+  if (h.own === null || h.stolen === null) {
     return normalizedStrength(hand)
   }
-  return normalizeScore(exactRerollEV(h.own, h.stolen, pending))
+  const chosen = h.rerollSelection
+  if (chosen !== null) {
+    return normalizeScore(exactRerollEV(h.own, h.stolen, chosen))
+  }
+  return normalizeScore(optimalReroll(h.own, h.stolen).ev)
 }
 
 function chooseSecondBet(state: GameState, player: PlayerId): Action {
@@ -396,7 +403,7 @@ function chooseSecondBet(state: GameState, player: PlayerId): Action {
   if (hand === null) {
     throw new Error('[bot] second bet requested before hand is formed')
   }
-  const strength = pendingStrength(state, player, hand)
+  const strength = prospectiveStrength(state, player, hand)
   const canRaise = state.raisesThisWindow < state.config.maxRaisesPerWindow
   const wantsRaise = strength >= BOT_TUNING.raiseAtLeast && canRaise
 

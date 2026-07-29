@@ -60,7 +60,7 @@ export type AbilityId =
    * handleMulinello in game.ts). Every earlier ability could be decided blind, so none of them
    * needed a moment that did not already exist.
    *
-   * That phase sits AFTER the second bet, together with the reroll it needs the result of. It
+   * That phase sits AFTER the second bet, together with the reroll whose result it needs. It
    * briefly sat before the bet instead, which let it inform the wager — and cost the wager its
    * meaning, since the dice were then final while the betting was still open (see the Phase docs
    * in gameTypes.ts). So the Mulinello has no betting leverage: it improves a hand whose stake

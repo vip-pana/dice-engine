@@ -491,9 +491,10 @@ function settleWindow(state: GameState, rng: Rng): GameState {
   if (state.phase === 'INITIAL_BET') {
     return startHandAfterInitialBet(state, rng)
   }
-  // SECOND_BET settled -> NOW throw the chosen dice, then the abilities that need the result,
-  // then the showdown. The betting is over before any of it, which is the whole point.
-  return resolveRerollAfterBetting(state, rng)
+  // SECOND_BET settled -> NOW the reroll happens, choice and throw together. The betting is over
+  // before any of it, which is the whole point: you commit chips to the hand you were dealt, and
+  // only then decide what to gamble away.
+  return enterRerollSelect(state)
 }
 
 // --- Transition: initial bet settled -> roll dice, go to STEAL ---
@@ -915,8 +916,10 @@ function handleSteal(state: GameState, player: PlayerId, commonIndex: number): G
     // Primary stole first; non-primary steals next.
     return { ...next, toAct: nonPrimary }
   }
-  // Non-primary just stole (second). Both have stolen -> reroll selection phase.
-  return enterRerollSelect(next)
+  // Non-primary just stole (second). Both hands are now complete as dealt, so the second
+  // betting round opens — BEFORE anything to do with the reroll. You wager on the hand you can
+  // see, then you decide what to throw away and throw it.
+  return enterSecondBet(next)
 }
 
 function enterRerollSelect(state: GameState): GameState {
@@ -1020,23 +1023,14 @@ function handleReroll(
     return { ...next, toAct: nonPrimary }
   }
 
-  // Both selections in. The dice are NOT thrown yet: the second bet comes first, so a player
-  // wagers on a hand they have chosen to change but not yet seen the result of. Betting after
-  // the throw made the round pointless — with both hands public and final, the winner was
-  // already determined, so the only correct plays were "fold every loss, raise every win".
-  return enterSecondBet(next, rng)
-}
-
-/**
- * The second bet has closed (or was skipped for want of chips): throw the chosen dice, then run
- * the abilities whose decision needs the result to exist, then go to the showdown.
- *
- * This is the whole post-betting tail of a hand, in one place, because two callers reach it —
- * the settled betting round and the all-in shortcut inside enterSecondBet — and a hand that
- * skipped the betting must still get its dice thrown.
- */
-function resolveRerollAfterBetting(state: GameState, rng: Rng): GameState {
-  return afterRerollResolved(applyRerollSelections(state, rng), rng)
+  // Both selections in, so the dice are thrown right now — choice and throw in one step, with no
+  // betting round in between for them to inform. The betting already happened, back before either
+  // seat had committed to a selection.
+  //
+  // Rolling both seats together (rather than each at its own REROLL) keeps neither seat's blind
+  // selection informed by the other's outcome.
+  next = applyRerollSelections(next, rng)
+  return afterRerollResolved(next, rng)
 }
 
 /** Throws each seat's chosen dice and persists the results into `own`. */
@@ -1339,7 +1333,14 @@ function handleLanternPeek(state: GameState, player: PlayerId): GameState {
   )
 }
 
-function enterSecondBet(state: GameState, rng: Rng): GameState {
+/**
+ * Opens the second betting round, straight after the steal.
+ *
+ * Takes no Rng, and that absence is the shape of the fix: this used to be reached from the end of
+ * REROLL_SELECT with dice already thrown, and its all-in shortcut had to be able to roll. Nothing
+ * random happens between the deal and this round any more — the reroll is entirely downstream.
+ */
+function enterSecondBet(state: GameState): GameState {
   // The second bet is a fresh betting round: the first-round chips are already in the pot
   // and stay there, so we reset each player's per-round `committed` to 0 and start with no
   // bet on the table. The primary must OPEN with an amount >= the first bet (openMinimum),
@@ -1358,13 +1359,11 @@ function enterSecondBet(state: GameState, rng: Rng): GameState {
   }
 
   // Someone is already all-in from the first round: there is nothing left to wager, so skip
-  // asking for a bet nobody can make. It must still go through resolveRerollAfterBetting and
-  // not straight to the showdown — the chosen dice have not been thrown yet at this point, and
-  // jumping the queue would send unrerolled hands to the comparison.
+  // asking for a bet nobody can make and go straight on to the reroll. NOT to the showdown —
+  // the players still get their reroll, they simply get it for no further money.
   if (noChipsBehind(reset)) {
-    return resolveRerollAfterBetting(
-      withLog(reset, 'Nessuno ha altre monete da puntare: si tira e si va allo showdown.'),
-      rng,
+    return enterRerollSelect(
+      withLog(reset, 'Nessuno ha altre monete da puntare: si passa direttamente al rilancio.'),
     )
   }
 

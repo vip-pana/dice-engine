@@ -62,33 +62,34 @@ segue la sequenza fissa:
 2. **Scommessa iniziale** — il primario apre puntando l'importo che vuole
    (≥ minimo); l'altro deve vedere o rilanciare (niente check, niente fold).
 3. **Furto** — clicca un dado comune per rubarlo (il primario ruba per primo).
-4. **Scelta rilancio** — seleziona quali dei tuoi 4 dadi rilanciare (tutti tranne
-   il rubato), poi conferma. Qui si punta anche il **Dado Torpedo** (obbligatorio,
-   se lo hai) e si scelge il bersaglio del **Dado Spugna** (facoltativo). Viene
-   registrata solo la **scelta**: i dadi non vengono ancora tirati.
-5. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
+4. **Seconda scommessa** — il primario punta ≥ della prima; l'altro vede,
    rilancia o **lascia la mano** (il fold è possibile solo qui, e solo se stai
-   affrontando una puntata: chi lascia cede piatto e punto). **Punti prima di
-   tirare**: i dadi che hai scelto di rilanciare sono ancora quelli di prima, e in
-   tavola li vedi segnati come «da rilanciare». È qui che si scommette davvero.
-6. **Si tira** — chiusa la scommessa, i dadi scelti da entrambi vengono lanciati
-   in un colpo solo. Da qui in poi la mano è definita e non si punta più.
-6b. **Mulinello** — solo se uno dei due ha quel dado speciale: avendo visto il
+   affrontando una puntata: chi lascia cede piatto e punto). **Punti prima del
+   rilancio**: hai davanti la mano come te l'hanno servita, e il rilancio è ancora
+   tutto da fare. È qui che si scommette davvero. Se lasci la mano ora, i dadi non
+   vengono nemmeno tirati.
+5. **Scelta rilancio** — seleziona quali dei tuoi 4 dadi rilanciare (tutti tranne
+   il rubato), poi conferma. Qui si punta anche il **Dado Torpedo** (obbligatorio,
+   se lo hai) e si scelge il bersaglio del **Dado Spugna** (facoltativo). Quando
+   entrambi hanno scelto **i dadi vengono tirati subito**: da qui in poi la mano è
+   definita e non si punta più.
+5b. **Mulinello** — solo se uno dei due ha quel dado speciale: avendo visto il
    risultato, decide se tirarlo una terza volta. Se nessuno ce l'ha, questo passo
    **non esiste**.
-6c. **Paguro** — solo se uno dei due ha un 🦀 Dado Paguro: quel dado si è diviso in
+5c. **Paguro** — solo se uno dei due ha un 🦀 Dado Paguro: quel dado si è diviso in
    tre facce coperte e il suo proprietario ne sceglie una **al buio**, senza vederne
    i valori. Come il Mulinello, se nessuno ce l'ha questo passo **non esiste**.
-7. **Showdown** — si confrontano le mani, si applicano i Dado Torpedo, il
+6. **Showdown** — si confrontano le mani, si applicano i Dado Torpedo, il
    vincitore incassa il piatto.
 
-> **Perché si punta prima di tirare.** Prima il tiro avveniva subito dopo la scelta,
-> quindi si scommetteva a dadi già definitivi. Ma in questo gioco **entrambe le mani
-> sono visibili**: a dadi finali il vincitore era già determinato (misurato: 400 mani
-> su 400), quindi le uniche mosse giuste erano «lascia se perdi, rilancia se vinci».
-> Una puntata in cui non puoi sbagliare non è una puntata. Ora il tiro sta dopo la
-> scommessa, e Mulinello e Paguro — che hanno bisogno di un risultato da guardare —
-> lo seguono: non influenzano più la puntata, ma la puntata torna un azzardo.
+> **Perché si punta prima del rilancio.** Prima il rilancio stava davanti alla
+> scommessa, quindi si puntava a dadi già definitivi. Ma in questo gioco **entrambe
+> le mani sono visibili**: a dadi finali il vincitore era già determinato (misurato:
+> 400 mani su 400), quindi le uniche mosse giuste erano «lascia se perdi, rilancia se
+> vinci». Una puntata in cui non puoi sbagliare non è una puntata. Ora la scommessa
+> viene prima di tutto il rilancio, e Mulinello e Paguro — che hanno bisogno di un
+> risultato da guardare — lo seguono: non influenzano più la puntata, ma la puntata
+> torna un azzardo.
 
 Se nessuno dei due ha più monete da puntare, le finestre di scommessa vengono
 **saltate**: la mano si gioca comunque per il punto del Bo3.
@@ -134,7 +135,7 @@ mostra nome, icona e regola.
 | 🌫️ Dado Brumeggio | Ogni dado dell'avversario esce **due volte** e tiene il **più basso**, per tutta la mano: è un **malus** che infliggi | **Non fa nulla** finché non lo rubi |
 | 🦀 Dado Paguro | Tira 3 dadi coperti e **scegli tu** quale tenere, **al buio**: è il gemello interattivo della Stella, ma senza vederne i valori resta un d6 neutro (**malus**, rinunci al "tieni il più alto") | Mai tra i comuni: solo sui tuoi dadi |
 
-Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 6b sopra):
+Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5b sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa. Quel momento
 sta **dopo** la scommessa, quindi il terzo tiro migliora la mano ma non cambia più
 quanto hai puntato.
@@ -158,7 +159,7 @@ sei facce. Un D4 in nebbia resta un D4, media 1,88.
 
 #### Cosa può assorbire la Spugna
 
-Scegli il bersaglio durante la **scelta rilancio** (passo 4), assieme ai dadi da
+Scegli il bersaglio durante la **scelta rilancio** (passo 5), assieme ai dadi da
 rilanciare. È facoltativo: puoi non spugnare niente.
 
 Funziona su **Torpedo, Dado d'Oro, Mulinello, Nero di Seppia e Brumeggio**. Non funziona su
