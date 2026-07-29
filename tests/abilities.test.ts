@@ -144,6 +144,54 @@ describe('D4: a 4-sided die', () => {
   })
 })
 
+describe('DADO_PAGURO: splits into 3 and keeps one blind', () => {
+  it('records all 3 rolled faces and keeps one of them', () => {
+    const rng = createRng(77)
+    for (let i = 0; i < 2000; i++) {
+      const die = rollDieWithAbility(rng, 'DADO_PAGURO')
+      expect(die.rolls).toHaveLength(3)
+      expect(die.rolls).toContain(die.value)
+      expect(die.ability).toBe('DADO_PAGURO')
+    }
+  })
+
+  it('has the expected value of a plain d6 (≈3.5) — the blind pick is neutral', () => {
+    // The whole identity of the die: three dice like the Stella, but a BLIND pick averages
+    // out to a bare d6, not the Stella's max-of-3 (4.958). This is why its kind is 'neutral'.
+    const rng = createRng(4242)
+    const samples = 60_000
+    let total = 0
+    for (let i = 0; i < samples; i++) {
+      total += rollDieWithAbility(rng, 'DADO_PAGURO').value
+    }
+    const mean = total / samples
+    expect(mean).toBeGreaterThan(3.42)
+    expect(mean).toBeLessThan(3.58)
+  })
+
+  it('rolls a 6 about as often as a plain die (≈16.7%), unlike the Stella', () => {
+    const rng = createRng(4343)
+    const samples = 60_000
+    let sixes = 0
+    for (let i = 0; i < samples; i++) {
+      if (rollDieWithAbility(rng, 'DADO_PAGURO').value === 6) sixes++
+    }
+    expect(sixes / samples).toBeGreaterThan(0.14)
+    expect(sixes / samples).toBeLessThan(0.19)
+  })
+
+  it('is classified as a neutral die, the first of its kind', () => {
+    expect(ABILITIES.DADO_PAGURO.kind).toBe('neutral')
+  })
+
+  it('keeps its ability through a reroll', () => {
+    const rng = createRng(78)
+    const rerolled = rerollDie(rng, rollDieWithAbility(rng, 'DADO_PAGURO'))
+    expect(rerolled.ability).toBe('DADO_PAGURO')
+    expect(rerolled.rolls).toHaveLength(3)
+  })
+})
+
 describe('NERO_DI_SEPPIA: conceals an opponent die', () => {
   const SEPPIA_ONLY: Loadout = ['NERO_DI_SEPPIA', null, null, null]
 
@@ -600,11 +648,10 @@ describe('random ability drops', () => {
   })
 
   it('ownChance is the per-ability chance of appearing in the hand', () => {
-    // Measured ONE ability at a time, which is the only configuration where the claim is
-    // actually true. With a pool bigger than the 4 slots, drawAbilitySlots starves whichever
-    // abilities come last in registry order (see the saturation test below) — so a whole-pool
-    // version of this test asserts something the code does not promise, and was already
-    // passing by a margin of 0.008 at six abilities.
+    // Measured ONE ability at a time, which is the only configuration where the FULL nominal
+    // rate is promised. With a pool bigger than the 4 slots the cap pulls every ability's rate
+    // a little below ownChance (fairly, all by the same amount — see the saturation test below),
+    // so a whole-pool version of this test would land near 0.31, not 0.35.
     const trials = 20_000
     for (const id of ALL_ABILITY_IDS) {
       const rng = createRng(77)
@@ -619,14 +666,16 @@ describe('random ability drops', () => {
     }
   })
 
-  it('starves later registry entries once the pool outgrows the 4 slots', () => {
-    // The flip side of the test above, asserted rather than left as a surprise. Slots are
-    // claimed in registry order and never stolen back, so with more abilities than slots the
-    // tail of ALL_ABILITY_IDS loses out. Worth pinning: it means registry ORDER is a balance
-    // decision, and appending an ability quietly makes it the rarest one.
+  it('drops every ability at the same rate once the pool outgrows the 4 slots', () => {
+    // The successor to the old "starves the tail" test, and the reason the drop model changed.
+    // Slots used to be claimed in registry order, so with more abilities than slots the tail of
+    // ALL_ABILITY_IDS lost out — the last-registered ability was quietly the rarest. Adding the
+    // tenth ability (the DADO_PAGURO) pushed that bias past the point of being defensible, so
+    // drawAbilitySlots now trims the surplus by a random key instead of by position. This test
+    // pins the property that replaced the bias: registry position no longer affects drop rate.
     const rng = createRng(31)
     const drops = { ownChance: 0.35, commonChance: 0, pool: ALL_ABILITY_IDS }
-    const trials = 20_000
+    const trials = 40_000
     const hits = new Map<AbilityId, number>()
     for (let i = 0; i < trials; i++) {
       const counts = countsByAbility(rollRandomLoadout(rng, drops))
@@ -637,36 +686,22 @@ describe('random ability drops', () => {
       }
     }
     const rateOf = (id: AbilityId): number => (hits.get(id) ?? 0) / trials
-    const first = ALL_ABILITY_IDS[0]!
-    const last = ALL_ABILITY_IDS[ALL_ABILITY_IDS.length - 1]!
+    const rates = ALL_ABILITY_IDS.map(rateOf)
+    const min = Math.min(...rates)
+    const max = Math.max(...rates)
 
-    // The head of the registry still gets its nominal rate; the tail is measurably squeezed.
-    expect(rateOf(first)).toBeGreaterThan(0.33)
-    expect(rateOf(last)).toBeLessThan(rateOf(first))
-    // Nobody is starved outright — the effect is a bias, not an exclusion.
-    //
-    // Measured rate of the LAST registry entry, 400k trials against an independent model of
-    // drawAbilitySlots (seed 31):
-    //   7 abilities -> 0.309   (ratio to head 0.883)
-    //   8 abilities -> 0.280   (ratio 0.802)
-    //   9 abilities -> 0.247   (ratio 0.702)  <- where we are now, with DADO_BRUMEGGIO
-    //  10 abilities -> 0.213   (ratio 0.608)  <- below this bound, this test FAILS
-    //
-    // The absolute 0.25 floor this assertion used to carry is gone, and deliberately: at 9
-    // abilities the 4 slots genuinely CANNOT deliver ownChance to everyone, which is the
-    // "accept it and say so here" that the old comment offered as the honest third option.
-    // (The other two do not help: more slots would mean more than 4 own dice, and a lower
-    // ownChance makes the absolute rate WORSE — 0.241 at chance 0.30.)
-    //
-    // So the invariant is now the RATIO rather than the rate: the tail keeps most of what
-    // the head gets. Still a bias, still not an exclusion.
-    //
-    // HEADS UP if you are adding the 10th ability: the headroom here is ONE ability, exactly
-    // as tight as the floor it replaced. The ratio decays ~0.09 per ability and this bound is
-    // 0.65. At that point the honest move is no longer to restate the bound — the drop model
-    // itself is the thing that has run out, and pushing the tail below ~60% of the head means
-    // "at most one of each in 4 slots" is no longer a fair way to hand out ten abilities.
-    expect(rateOf(last)).toBeGreaterThan(rateOf(first) * 0.65)
+    // The 4-slot cap pulls every ability's realised rate below its nominal 0.35 — with ten
+    // abilities at 0.35 the 4 slots genuinely cannot deliver the full rate to everyone — but it
+    // pulls them ALL down by the same ~0.31, so the band across the whole registry stays tight.
+    expect(min).toBeGreaterThan(0.28)
+    expect(max).toBeLessThan(0.34)
+    // Position-independence, the property the old registry-order model lacked: the rarest and
+    // the most common ability are within noise of each other, wherever they sit in the registry.
+    expect(min / max).toBeGreaterThan(0.9)
+    // And specifically the head and the tail, which the old model spread ~0.6 apart.
+    const first = rateOf(ALL_ABILITY_IDS[0]!)
+    const last = rateOf(ALL_ABILITY_IDS[ALL_ABILITY_IDS.length - 1]!)
+    expect(Math.abs(first - last)).toBeLessThan(0.02)
   })
 
   it('spreads a special across all 4 slots, roughly uniformly', () => {
@@ -778,16 +813,18 @@ describe('random ability drops', () => {
       abilityDrops: { ownChance: 0, commonChance: 1, pool: ALL_ABILITY_IDS },
     })
     state = playToSteal(state, rng)
-    // commonChance 1 puts one die of each ability among the commons — take the Stella.
-    const specialIndex = state.common!.findIndex((d) => d.ability === 'STELLA_ESSICCATA')
+    // commonChance 1 fills all 3 common slots with specials; the fair cap decides WHICH three,
+    // so take whichever landed rather than assuming a particular one.
+    const specialIndex = state.common!.findIndex((d) => d.ability != null)
     expect(specialIndex).toBeGreaterThanOrEqual(0)
+    const stolenAbility = state.common![specialIndex]!.ability
 
     state = reducer(
       state,
       { type: 'STEAL', player: state.primary, commonIndex: specialIndex },
       rng,
     )
-    expect(state.hands[state.primary].stolen!.ability).toBe('STELLA_ESSICCATA')
+    expect(state.hands[state.primary].stolen!.ability).toBe(stolenAbility)
   })
 
   it('the steal log names the ability that changed hands, not just a value', () => {
@@ -798,8 +835,9 @@ describe('random ability drops', () => {
       abilityDrops: { ownChance: 0, commonChance: 1, pool: ALL_ABILITY_IDS },
     })
     state = playToSteal(state, rng)
-    const specialIndex = state.common!.findIndex((d) => d.ability === 'STELLA_ESSICCATA')
+    const specialIndex = state.common!.findIndex((d) => d.ability != null)
     expect(specialIndex).toBeGreaterThanOrEqual(0)
+    const stolenAbility = state.common![specialIndex]!.ability!
 
     state = reducer(
       state,
@@ -808,7 +846,7 @@ describe('random ability drops', () => {
     )
     const stealLine = state.log.find((line) => line.includes('ruba il dado'))
     expect(stealLine).toBeDefined()
-    expect(stealLine).toContain(ABILITIES.STELLA_ESSICCATA.icon)
+    expect(stealLine).toContain(ABILITIES[stolenAbility].icon)
   })
 })
 
@@ -2258,6 +2296,7 @@ describe("DADO_BRUMEGGIO: fogs every roll the opponent makes", () => {
       ['D4', 2],
       ['DADO_BRUMEGGIO', 2],
       ['STELLA_ESSICCATA', 6],
+      ['DADO_PAGURO', 6],
     ] as const) {
       for (const seed of [907, 908, 909]) {
         const { rng, draws } = countingRng(seed)

@@ -88,8 +88,25 @@ export const NO_ABILITY_DROPS: AbilityDropConfig = {
  * Rng discipline: the SAME number of draws is consumed per ability whether or not it
  * lands (one for the chance, one for the slot). That keeps the downstream dice stream
  * from shifting based on the outcome, so a seed stays reproducible while drop rates are
- * being tuned. `pool` order therefore matters for reproducibility — ALL_ABILITY_IDS is
- * registry order, which is stable.
+ * being tuned. `pool` order still fixes the ORDER those draws are consumed in — so it
+ * matters for reproducibility — but no longer for WHO wins: see the fair cap below.
+ *
+ * The fair cap (why this is not a plain registry-order walk). Once the pool outgrows the
+ * `size` slots, more abilities can hit in one draw than there is room for, and something has
+ * to give. Walking the pool in registry order and dropping whoever arrives when the slots are
+ * full starves the TAIL of the registry — the last-registered ability becomes the rarest,
+ * purely for being defined last. That was tolerable at a handful of abilities and stopped
+ * being so at ten (the DADO_PAGURO); the drop model, not the test bound, was the thing that
+ * had run out. So the surplus is now trimmed by a random KEY, not by position: every ability
+ * that hits is equally likely to be the one dropped, so all of them drop at the same rate.
+ *
+ * The key costs no extra draw. The single slot draw `r` in [0,1) already carries two
+ * independent uniforms: its integer part `floor(r*size)` is the uniform slot (bit-for-bit the
+ * old `nextInt(0,size-1)`), and its fractional part `frac(r*size)` is an independent uniform
+ * used as the keep-key. Because the two are independent, capping by the fractional part does
+ * not bias the slot the survivors land in. And because the slot draw is unchanged whenever the
+ * hits fit (<= size), this is bit-identical to the old function in every non-oversubscribed
+ * draw — only the rare "more than `size` hit at once" case resolves differently, and fairly.
  */
 function drawAbilitySlots(
   rng: Rng,
@@ -99,13 +116,29 @@ function drawAbilitySlots(
 ): readonly (AbilityId | null)[] {
   const slots: (AbilityId | null)[] = Array.from({ length: size }, () => null)
 
+  const hitters: { readonly id: AbilityId; readonly pick: number; readonly key: number }[] = []
   for (const id of pool) {
     const hits = chance > 0 && rng.next() < chance
-    // Drawn unconditionally to keep the stream aligned; only used when `hits`.
-    const pick = rng.nextInt(0, size - 1)
+    // Drawn unconditionally to keep the stream aligned; only used when `hits`. `scaled` splits
+    // into a uniform slot (its integer part, == the old nextInt(0,size-1)) and an independent
+    // uniform keep-key (its fractional part).
+    const scaled = rng.next() * size
     if (!hits) {
       continue
     }
+    const pick = Math.floor(scaled)
+    hitters.push({ id, pick, key: scaled - pick })
+  }
+
+  // Fair cap: when more abilities hit than there are slots, keep the `size` with the smallest
+  // keep-key. The key is independent of registry order, so no ability is starved for coming
+  // last — this is the whole reason the surplus is trimmed here rather than by walk order.
+  if (hitters.length > size) {
+    hitters.sort((a, b) => a.key - b.key)
+    hitters.length = size
+  }
+
+  for (const { id, pick } of hitters) {
     // Take the drawn slot, or the next free one after it — so a collision between two
     // abilities shifts the second along instead of overwriting the first.
     for (let i = 0; i < size; i++) {

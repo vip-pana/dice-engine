@@ -39,11 +39,16 @@ export interface AbilitySpec {
   /** Single glyph badge drawn on the die face in the UI. */
   readonly icon: string
   /**
-   * Whether the ability helps or hurts the die that carries it. Drives the UI accent, so
-   * a malus never reads as a buff at a glance. Kept here rather than in the UI so a new
-   * ability declares its own colour along with its rules.
+   * Whether the ability helps, hurts, or leaves untouched the die that carries it. Drives the
+   * UI accent, so a malus never reads as a buff at a glance. Kept here rather than in the UI so
+   * a new ability declares its own colour along with its rules.
+   *
+   * `'neutral'` is for a die whose value distribution is exactly a plain d6's (E[value] 3.5) —
+   * it does SOMETHING (it rolls differently, or reads differently), but it is neither a reward
+   * nor a penalty on average, so painting it gold or violet would lie. See DADO_PAGURO, the
+   * first one: three dice rolled, one kept blind, which averages out to a bare die.
    */
-  readonly kind: 'buff' | 'malus'
+  readonly kind: 'buff' | 'malus' | 'neutral'
   /**
    * When true this ability may only sit on a player's OWN dice, never on a shared common
    * die. Needed by effects defined in terms of "the opponent": a common die has no owner
@@ -119,6 +124,18 @@ function keepHighest(rolls: readonly DieValue[]): DieValue {
 /** Lowest of the rolled faces. Mirror of keepHighest; used by the fog, not by any spec. */
 function keepLowest(rolls: readonly DieValue[]): DieValue {
   return rolls.reduce<DieValue>((worst, v) => (v < worst ? v : worst), 6)
+}
+
+/**
+ * The first of the rolled faces — the die the DADO_PAGURO's holder grabbed blind.
+ *
+ * Deliberately NOT max or min: the Paguro's holder chooses with no information, and for three
+ * i.i.d. faces any fixed pick has the same uniform distribution a real blind choice would. So
+ * "the first" IS the blind grab, not a stand-in for one. See DADO_PAGURO in types.ts for why
+ * this lives in a resolve rather than a click-to-choose phase.
+ */
+function blindPick(rolls: readonly DieValue[]): DieValue {
+  return rolls[0]!
 }
 
 /**
@@ -340,6 +357,27 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
+  },
+  DADO_PAGURO: {
+    id: 'DADO_PAGURO',
+    name: 'Dado Paguro',
+    description:
+      'Quando viene lanciato si divide in 3 dadi e tu ne scegli uno al buio, senza vederne il valore.',
+    // A hermit crab (paguro) that grabs a shell without looking inside: the emoji names the die
+    // and reads at badge size. Distinct from every other icon in the set.
+    icon: '🦀',
+    // NEUTRAL, not a buff — the point of the die. It rolls 3 like the Stella but keeps a BLIND
+    // pick, so its kept face is a uniform d6 (E[value] 3.500), exactly a plain die. It must not
+    // read gold like the Stella it resembles: three dice that average out to one ordinary die.
+    kind: 'neutral',
+    // Three faces, like the Stella — the UI splits it into three shells.
+    diceRolled: 3,
+    // Face decided here at roll time, so NOT spongeable (like Stella and the D4): the kept
+    // shell is already committed to Die.value before a Spugna target can be named.
+    roll: (rng) => rollFaces(rng, 3),
+    // The blind grab: the first of the three. For i.i.d. faces that is a genuine uniform draw,
+    // not a stand-in for one — see blindPick above and DADO_PAGURO in types.ts.
+    resolve: blindPick,
   },
 }
 

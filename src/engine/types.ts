@@ -122,6 +122,28 @@ export type AbilityId =
    * that already separates the `drops` and `deck` own-dice modes (see drawLoadouts).
    */
   | 'DADO_BRUMEGGIO'
+  /**
+   * Rolls 3 dice and keeps ONE — but the holder picks it BLIND, before any face is known.
+   *
+   * The Stella Essiccata's twin, and the contrast is the whole point: the Stella rolls 3 and
+   * the ENGINE keeps the highest (E[value] 4.958, a strong buff); the Paguro rolls 3 and the
+   * PLAYER keeps one without seeing them. A blind pick among three i.i.d. d6 is uniform, so
+   * its kept face is distributed exactly like a plain die: E[value] 3.500, P(6) 16.7%. That is
+   * why its `kind` is `'neutral'` and not `'buff'` — three shells, but the crab grabs one in
+   * the dark, and on average does no better than a bare d6.
+   *
+   * It stays in the AbilitySpec table with Stella and the D4 — no reducer, no extra phase —
+   * DELIBERATELY, and for the reason the DADO_LANTERNA comment gives for staying un-spongeable:
+   * a choice made with no information is not a decision anyone can play to. Modelling the blind
+   * grab as a live click would add a phase whose outcome the player cannot influence, so the
+   * pick is resolved here as "the first of the three", which for i.i.d. faces is the same
+   * uniform draw a genuine blind choice would be. The die still SPLITS into 3 for the UI, so
+   * the shells it rolled — and the one it kept — are shown after the fact, exactly like Stella.
+   *
+   * Face decided at roll time, so like Stella and the D4 it is NOT spongeable: by the time a
+   * Spugna target is named the kept face is already committed and the other two shells are gone.
+   */
+  | 'DADO_PAGURO'
 
 /**
  * A rolled die.

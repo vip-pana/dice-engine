@@ -44,10 +44,12 @@ export interface DieViewProps {
 const CONCEALED_ACCENT = '#7c3aed'
 
 /**
- * Accent per ability kind: gold for a buff, violet for a malus. A malus die must not read
- * as a reward at a glance, so the two never share a colour.
+ * Accent per ability kind: gold for a buff, violet for a malus, cyan for a neutral. A malus
+ * die must not read as a reward at a glance, so buff and malus never share a colour; the
+ * neutral cyan is a third distinct hue so a die that is neither (see DADO_PAGURO) is not
+ * dressed up as gold like the Stella it resembles.
  */
-export const ACCENT_BY_KIND = { buff: '#facc15', malus: '#a78bfa' } as const
+export const ACCENT_BY_KIND = { buff: '#facc15', malus: '#a78bfa', neutral: '#22d3ee' } as const
 
 /** Default accent for ability chrome that is not tied to one specific die. */
 export const ABILITY_ACCENT = ACCENT_BY_KIND.buff

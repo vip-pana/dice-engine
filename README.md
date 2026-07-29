@@ -120,6 +120,7 @@ mostra nome, icona e regola.
 | 🧽 Dado Spugna | Annulla **un'abilità** dell'avversario a tua scelta, per questa mano | **Non fa nulla** finché non lo rubi |
 | 🏮 Dado Lanterna | Una **sbirciata** al mazzo intero del Bot, quando vuoi. Una volta per mano | **Non fa nulla** finché non lo rubi |
 | 🌫️ Dado Brumeggio | Ogni dado dell'avversario esce **due volte** e tiene il **più basso**, per tutta la mano: è un **malus** che infliggi | **Non fa nulla** finché non lo rubi |
+| 🦀 Dado Paguro | Tira 3 dadi e ne scegli uno **al buio**: come la Stella, ma il valore medio è quello di un dado normale (**neutro**) | Vale per chi lo ruba |
 
 Il Mulinello è l'unico che cambia la sequenza della mano (vedi il passo 5 sopra):
 serve un momento in cui il risultato esiste già ma la mano non è chiusa.
@@ -147,7 +148,7 @@ Scegli il bersaglio durante la **scelta rilancio** (passo 4), assieme ai dadi da
 rilanciare. È facoltativo: puoi non spugnare niente.
 
 Funziona su **Torpedo, Dado d'Oro, Mulinello, Nero di Seppia e Brumeggio**. Non funziona su
-**Stella Essiccata e D4**: quelle due decidono la loro faccia *nel momento in cui
+**Stella Essiccata, D4 e Paguro**: quelle tre decidono la loro faccia *nel momento in cui
 il dado viene lanciato*, e a quel punto le facce scartate non esistono più — non
 c'è niente da annullare. Non funziona nemmeno sulla **🏮 Lanterna**, ma per un
 motivo diverso: la sbirciata la fai **quando vuoi tu**, quindi annullarla si

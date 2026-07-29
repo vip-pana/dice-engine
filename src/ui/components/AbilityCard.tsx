@@ -51,7 +51,7 @@ export function AbilityCard(props: AbilityCardProps): JSX.Element | null {
         <div style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{spec.name}</div>
         <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>{spec.description}</div>
         <div style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
-          {spec.kind === 'malus' ? 'Malus' : 'Bonus'}
+          {spec.kind === 'malus' ? 'Malus' : spec.kind === 'neutral' ? 'Neutrale' : 'Bonus'}
           {active ? '' : ` — ${inactiveNote}`}
         </div>
       </div>
