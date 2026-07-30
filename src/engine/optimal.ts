@@ -26,14 +26,24 @@ const FACES: readonly DieValue[] = [1, 2, 3, 4, 5, 6]
  * 1..6 assumption: valid for a plain die or a Mulinello, WRONG for an ability that reshapes
  * its faces (a Stella keeps max-of-3, a D4 caps at 4), so do not price those with this.
  *
- * Also WRONG for any die rolled in fog: an opponent's Dado Brumeggio makes every reroll
- * min-of-two, E[face] 2.528 rather than 3.500, so this over-values rerolling in fog. The fog
- * is a property of the SEAT, not of the die, so nothing in the dice passed here reveals it.
+ * By DEFAULT also WRONG for any die rolled in fog: an opponent's Dado Brumeggio makes every
+ * reroll min-of-two, E[face] 2.528 rather than 3.500, so the uniform assumption over-values
+ * rerolling in fog. The fog is a property of the SEAT, not of the die, so nothing in the dice
+ * passed here reveals it — which is why a caller that knows its seat is fogged has to say so
+ * by passing `faceWeights` (see FOGGED_FACE_WEIGHTS in abilities.ts).
  */
 export function exactRerollEV(
   own: OwnDice,
   stolen: Die,
   rerollIdx: readonly number[],
+  /**
+   * Probability of each face, index 0 = face 1. Omit for a uniform (clear) die.
+   *
+   * Re-weighting the enumeration keeps the result EXACT — this is not a scale factor applied
+   * to a uniform answer, which could not be exact because handScore is not linear in face
+   * value. Each outcome simply gets its true probability instead of 1/6^k.
+   */
+  faceWeights?: readonly number[],
 ): number {
   const k = rerollIdx.length
   if (k === 0) {
@@ -61,9 +71,22 @@ export function exactRerollEV(
       { value: dice[3]! },
       stolen,
     ]
-    sum += handScore(hand)
+    // The uniform branch performs exactly the floating-point operations it always did — an
+    // unweighted sum divided once at the end. That is load-bearing rather than tidy: this
+    // function feeds an argmax (optimalReroll below), and re-associating the arithmetic could
+    // flip a near-tie and quietly change how the default bot plays.
+    if (faceWeights === undefined) {
+      sum += handScore(hand)
+    } else {
+      let p = 1
+      for (let j = 0; j < k; j++) {
+        p *= faceWeights[faceOf[j]! - 1]!
+      }
+      sum += p * handScore(hand)
+    }
   }
-  return sum / total
+  // Weighted probabilities already sum to 1, so there is nothing left to divide by.
+  return faceWeights === undefined ? sum / total : sum
 }
 
 export interface OptimalReroll {
@@ -76,11 +99,19 @@ export interface OptimalReroll {
 /**
  * Finds the reroll keep-set that maximizes exact expected final strength, given the fixed
  * stolen die. `maxReroll` bounds how many own dice may be rerolled (default 4 = all).
+ *
+ * `faceWeights` is passed straight through to exactRerollEV — omit it for a clear seat, pass
+ * FOGGED_FACE_WEIGHTS for a fogged one. It changes WHICH keep-set wins, not merely the EV of the
+ * winner, and it changes it in BOTH directions: a fogged face averages 2.528 rather than 3.500,
+ * but the fogged distribution is bunched on the low faces, so fresh dice pair up more often — and
+ * a category outranks a face value. "In fog you should keep more" is therefore not what this
+ * computes, and not what it finds.
  */
 export function optimalReroll(
   own: OwnDice,
   stolen: Die,
   maxReroll = 4,
+  faceWeights?: readonly number[],
 ): OptimalReroll {
   const idx = [0, 1, 2, 3] as const
   let best: OptimalReroll = { rerollIdx: [], ev: -Infinity }
@@ -90,7 +121,7 @@ export function optimalReroll(
     if (reroll.length > maxReroll) {
       continue
     }
-    const ev = exactRerollEV(own, stolen, reroll)
+    const ev = exactRerollEV(own, stolen, reroll, faceWeights)
     if (ev > best.ev) {
       best = { rerollIdx: reroll, ev }
     }
@@ -109,15 +140,19 @@ export interface OptimalPlay {
  * Solves the full hand-building decision: which common die to steal AND which own dice to
  * reroll, to maximize exact expected final strength. `available` are the common dice still
  * on offer (their index in this array is returned as `stealIndex`).
+ *
+ * `faceWeights` passes through to the reroll EV, so a fogged seat picks the steal that is best
+ * GIVEN the fog rather than the one that would be best in clear air.
  */
 export function optimalPlay(
   own: OwnDice,
   available: readonly Die[],
   maxReroll = 4,
+  faceWeights?: readonly number[],
 ): OptimalPlay {
   let best: OptimalPlay | null = null
   for (let i = 0; i < available.length; i++) {
-    const reroll = optimalReroll(own, available[i]!, maxReroll)
+    const reroll = optimalReroll(own, available[i]!, maxReroll, faceWeights)
     if (best === null || reroll.ev > best.reroll.ev) {
       best = { stealIndex: i, reroll }
     }

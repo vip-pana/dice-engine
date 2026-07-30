@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
 import {
   ALL_ABILITY_IDS,
+  ALL_DIFFICULTIES,
   abilitySpec,
+  botDeckSpecialsOffsetFor,
   isSpongeable,
   inPeekablePhase,
   chooseAction,
@@ -14,9 +16,11 @@ import {
   maxBetFor,
   rollBotDeck,
   rollRandomBotDeck,
+  stakesFor,
   viewFor,
   type AbilityId,
   type Deck,
+  type Difficulty,
   type GameState,
   type Hand,
   type HandCategory,
@@ -25,7 +29,7 @@ import {
   type Rng,
 } from '../engine'
 import { useGame } from './useGame'
-import { categoryLabel, playerLabel } from './labels'
+import { categoryLabel, difficultyBlurb, difficultyLabel, playerLabel } from './labels'
 import { DIE_SIZE, useIsPhone, useIsWide } from './responsive'
 import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
@@ -56,6 +60,8 @@ type Setup = {
   readonly botMode: BotDeckMode
   /** Only set when botMode is 'custom'. */
   readonly botDeck: Deck | null
+  /** How well the Bot plays, how much money is at stake, and how strong its deck is. */
+  readonly difficulty: Difficulty
 }
 
 /**
@@ -87,7 +93,9 @@ export function App(): JSX.Element {
   }
   return (
     <BotDeckChooser
-      onConfirm={(botMode, botDeck) => setSetup({ deck, botMode, botDeck })}
+      onConfirm={(botMode, botDeck, difficulty) =>
+        setSetup({ deck, botMode, botDeck, difficulty })
+      }
       onBack={() => setDeck(null)}
     />
   )
@@ -96,14 +104,15 @@ export function App(): JSX.Element {
 /**
  * Stable identity for a setup, used to remount Match when the player changes anything.
  *
- * Includes the bot mode and its custom deck, not just the human's deck: switching only the
- * mode has to restart the match too, and a key built from the human deck alone would silently
- * keep the old one running.
+ * Includes the bot mode, its custom deck AND the difficulty, not just the human's deck:
+ * switching only one of them has to restart the match too, and a key built from the human deck
+ * alone would silently keep the old one running. The difficulty is the newest way to get that
+ * wrong — it changes the stakes, which are baked into the state at creation.
  */
 function setupKey(setup: Setup): string {
   const own = setup.deck.map((id) => id ?? '-').join('|')
   const bot = setup.botDeck?.map((id) => id ?? '-').join('|') ?? ''
-  return `${own}#${setup.botMode}#${bot}`
+  return `${own}#${setup.botMode}#${bot}#${setup.difficulty}`
 }
 
 /**
@@ -113,41 +122,55 @@ function setupKey(setup: Setup): string {
  * seed reproduces the whole match including both decks. `commonChance` stays live — common
  * dice belong to nobody and are never part of a deck — while `ownChance` is 0 because own
  * dice now come from the deck (deck mode ignores it either way; 0 is honesty, not effect).
+ *
+ * The difficulty's stakes enter here, and this is the only place in the UI that builds
+ * NewGameOptions — which also means `newMatch()` (it re-runs this factory) keeps the level.
  */
 function optionsForSetup(setup: Setup): (rng: Rng) => NewGameOptions {
+  const stakes = stakesFor(setup.difficulty)
   return (rng) => ({
     decks: { human: setup.deck, bot: botDeckFor(setup, rng) },
     abilityDrops: { ...DEFAULT_ABILITY_DROPS, ownChance: 0 },
+    config: stakes.config,
+    startingBankroll: stakes.startingBankroll,
   })
 }
 
 function botDeckFor(setup: Setup, rng: Rng): Deck {
+  const offset = botDeckSpecialsOffsetFor(setup.difficulty)
   switch (setup.botMode) {
     case 'mirrored':
-      return rollBotDeck(rng, setup.deck)
+      return rollBotDeck(rng, setup.deck, offset)
     case 'random':
-      return rollRandomBotDeck(rng)
+      return rollRandomBotDeck(rng, offset)
     case 'custom':
+      // NO difficulty offset here, deliberately: you composed this deck yourself, and quietly
+      // adding or removing a special from it would be the worst thing the level could do.
       // Non-null by construction: 'custom' is only ever set together with a deck.
-      return setup.botDeck ?? rollBotDeck(rng, setup.deck)
+      return setup.botDeck ?? rollBotDeck(rng, setup.deck, offset)
   }
 }
 
 /**
- * Second setup screen: how the bot's deck is generated.
+ * Second setup screen: the difficulty, and how the bot's deck is generated.
  *
  * Its own screen rather than a control inside the deck builder, because 'custom' has to open
  * the builder again — nesting one builder inside another would be a worse shape than
  * sequencing them.
+ *
+ * The difficulty sits ABOVE the three deck-mode buttons, which are still what confirms and
+ * starts the match. So the flow is unchanged for anyone who does not care: 'Normale' is
+ * preselected and one click still starts a game.
  */
 function BotDeckChooser({
   onConfirm,
   onBack,
 }: {
-  onConfirm: (mode: BotDeckMode, deck: Deck | null) => void
+  onConfirm: (mode: BotDeckMode, deck: Deck | null, difficulty: Difficulty) => void
   onBack: () => void
 }): JSX.Element {
   const [composing, setComposing] = useState(false)
+  const [difficulty, setDifficulty] = useState<Difficulty>('normal')
   const phone = useIsPhone()
 
   if (composing) {
@@ -155,9 +178,12 @@ function BotDeckChooser({
       <DeckBuilder
         title="Componi il mazzo del Bot"
         confirmLabel="Gioca contro questo mazzo"
-        // No mention of how the bot's deck is generated: you ARE generating it.
-        note="Non lo vedrai in partita: solo una 🏮 Lanterna può darti una sbirciata, una volta per mano. È così che puoi verificare che l'abilità dica il vero."
-        onConfirm={(deck) => onConfirm('custom', deck)}
+        // No mention of how the bot's deck is generated: you ARE generating it. It also says
+        // the level leaves this deck alone, because everywhere else the level adjusts it.
+        note={`Non lo vedrai in partita: solo una 🏮 Lanterna può darti una sbirciata, una volta per mano. È così che puoi verificare che l'abilità dica il vero. Il livello ${difficultyLabel(difficulty)} non tocca questo mazzo: lo componi tu.`}
+        // `composing` is state in THIS component, so the chosen difficulty survives the
+        // detour through the builder and is still here to be confirmed with the deck.
+        onConfirm={(deck) => onConfirm('custom', deck, difficulty)}
       />
     )
   }
@@ -203,8 +229,14 @@ function BotDeckChooser({
       }}
     >
       <h1 style={{ marginTop: 0, marginBottom: 6, fontSize: phone ? '1.5rem' : undefined }}>
-        Il mazzo del Bot
+        L'avversario
       </h1>
+
+      <DifficultyPicker value={difficulty} onChange={setDifficulty} />
+
+      <h2 style={{ fontSize: 14, color: '#94a3b8', marginBottom: 6, marginTop: 24 }}>
+        Come nasce il suo mazzo
+      </h2>
       <p style={{ color: '#94a3b8', fontSize: 14, lineHeight: 1.6, marginTop: 0 }}>
         Il suo mazzo resta nascosto durante la partita: solo una <strong>🏮 Lanterna</strong>{' '}
         può darti una sbirciata, una volta per mano.
@@ -213,12 +245,12 @@ function BotDeckChooser({
       {option(
         'Specchiato',
         'Stesso numero di speciali del tuo mazzo, ma scelti a caso. È il comportamento di sempre.',
-        () => onConfirm('mirrored', null),
+        () => onConfirm('mirrored', null, difficulty),
       )}
       {option(
         'Casuale',
         'Anche il numero di speciali è casuale: non sai né quanti né quali. Qui la Lanterna vale di più.',
-        () => onConfirm('random', null),
+        () => onConfirm('random', null, difficulty),
       )}
       {option('Lo compongo io', 'Scegli tu i suoi speciali — utile per provare le abilità.', () =>
         setComposing(true),
@@ -241,7 +273,71 @@ function BotDeckChooser({
       >
         ← Cambia il tuo mazzo
       </button>
+      {/* The level resets to Normale on a round trip through the deck builder, exactly as the
+          deck mode already does — this screen owns both, and going back unmounts it. */}
     </main>
+  )
+}
+
+/**
+ * The three difficulty levels, as a radio group.
+ *
+ * A GRID of three equal columns rather than a flex row: the three Italian labels must fit a
+ * 320px screen without depending on a breakpoint, which is the same lesson ScoreBar's comment
+ * records about five stats in a phone-width row.
+ *
+ * The blurb under the row is not decoration — it is where the level states its consequences,
+ * including the two that bind the HUMAN (the minimum bet and the raise cap). Without it, the
+ * raise button greying out sooner on Facile reads as a bug rather than as the level.
+ */
+function DifficultyPicker({
+  value,
+  onChange,
+}: {
+  value: Difficulty
+  onChange: (d: Difficulty) => void
+}): JSX.Element {
+  return (
+    <div>
+      <div
+        role="radiogroup"
+        aria-label="Livello di difficoltà"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}
+      >
+        {ALL_DIFFICULTIES.map((id) => {
+          const active = id === value
+          return (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(id)}
+              style={{
+                padding: '10px 8px',
+                // Thumb-sized, like every other control on the setup screens.
+                minHeight: 44,
+                borderRadius: 10,
+                cursor: 'pointer',
+                font: 'inherit',
+                fontSize: 15,
+                fontWeight: active ? 700 : 400,
+                // Same two-tone palette as the deck-mode buttons below, so the two rows read as
+                // one screen; only the accent border says which one is chosen.
+                background: active ? '#1e293b' : '#0b1220',
+                border: `1px solid ${active ? '#38bdf8' : '#1e293b'}`,
+                color: active ? '#e2e8f0' : '#94a3b8',
+              }}
+            >
+              {difficultyLabel(id)}
+            </button>
+          )
+        })}
+      </div>
+      <p style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.6, margin: '10px 0 0' }}>
+        {difficultyBlurb(value)}
+      </p>
+    </div>
   )
 }
 
@@ -306,10 +402,23 @@ function Match({
           {/* On a phone the title is pure overhead above the game, so it shrinks rather than
               eating a fifth of the first screenful. */}
           <h1 style={{ marginTop: 0, fontSize: phone ? '1.5rem' : undefined, marginBottom: phone ? 12 : undefined }}>
-            Poker di Dadi
+            Poker di Dadi{' '}
+            {/*
+              The level, on the title line rather than as a sixth ScoreBar stat: that strip
+              already barely fits five on a phone (see its own comment). Shown at EVERY level
+              including Normale — hiding the default would leave the player unsure the setting
+              took at all, which is worse than one word of chrome.
+            */}
+            <span style={{ fontSize: phone ? 13 : 14, fontWeight: 400, color: '#94a3b8' }}>
+              · {difficultyLabel(setup.difficulty)}
+            </span>
           </h1>
           <ScoreBar state={state} />
-          <BotAutoPlayer state={trueState} dispatch={dispatch} />
+          <BotAutoPlayer
+            state={trueState}
+            dispatch={dispatch}
+            difficulty={setup.difficulty}
+          />
           <Table state={state} dispatch={dispatch} grow={wide} />
           <OutcomeBanner state={state} />
           <Controls
@@ -452,8 +561,10 @@ function LastMove({ log }: { log: readonly string[] }): JSX.Element | null {
 function BotAutoPlayer(props: {
   state: GameState
   dispatch: (a: ReturnType<typeof chooseAction>) => void
+  /** How well this bot plays. Chosen before the match; see difficulty.ts. */
+  difficulty: Difficulty
 }): null {
-  const { state, dispatch } = props
+  const { state, dispatch, difficulty } = props
   useEffect(() => {
     const botActs =
       state.toAct === 'bot' &&
@@ -466,10 +577,10 @@ function BotAutoPlayer(props: {
     }
     // Small delay so the human can follow the bot's moves.
     const id = setTimeout(() => {
-      dispatch(chooseAction(state, 'bot', botBrainRng))
+      dispatch(chooseAction(state, 'bot', botBrainRng, difficulty))
     }, 500)
     return () => clearTimeout(id)
-  }, [state, dispatch])
+  }, [state, dispatch, difficulty])
   return null
 }
 

@@ -12,7 +12,8 @@
     "typecheck": "tsc -b --noEmit",
     "sim": "tsx src/sim/montecarlo.ts",
     "sim:optimal": "tsx src/sim/montecarlo-optimal.ts",
-    "sim:abilities": "tsx src/sim/montecarlo-abilities.ts"
+    "sim:abilities": "tsx src/sim/montecarlo-abilities.ts",
+    "sim:difficulty": "tsx src/sim/montecarlo-difficulty.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

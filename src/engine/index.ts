@@ -14,4 +14,6 @@ export * from './gameTypes'
 export * from './actions'
 export * from './game'
 export * from './view'
+// Before bot.ts, which consumes it: difficulty is the bot's configuration, not the reducer's.
+export * from './difficulty'
 export * from './bot'

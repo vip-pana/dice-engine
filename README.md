@@ -33,6 +33,7 @@ npm run typecheck  # type-check TypeScript strict
 npm run sim        # simulatore Monte Carlo (tsx)
 npm run sim:abilities  # forza relativa dei dadi speciali
 npm run sim:optimal    # gioco ottimale come tetto teorico
+npm run sim:difficulty # quanto pesa il livello di difficoltà (match interi)
 ```
 
 I simulatori accettano due variabili d'ambiente opzionali:
@@ -112,8 +113,10 @@ partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
 - Puoi mettere **al massimo un dado di ogni tipo speciale**; gli slot restanti
   sono d6 normali. Quindi in una mano non trovi mai due speciali identici.
 - Un dado speciale nel mazzo esce in circa **33%** delle mani (4 su 12).
-- Il bot riceve un mazzo di 12 dadi come il tuo, e **come nasce lo scegli tu** al
-  passo dopo (vedi *Il mazzo del Bot* sotto). Col default «Specchiato» ha lo stesso
+- Il bot riceve un mazzo di 12 dadi come il tuo; al passo dopo scegli **il livello di
+  difficoltà** e **come nasce** il suo mazzo (vedi *Livello di difficoltà* e *Il mazzo
+  del Bot* sotto — il livello sposta anche il conteggio dei suoi speciali di uno).
+  Col default «Specchiato» a livello Normale ha lo stesso
   **numero** di speciali del tuo — quindi un malus come il D4 ti costa due volte,
   perché prendi la penalità e gli regali un altro speciale che potrebbe essere un
   buff. Il suo mazzo non è mai visibile: solo una 🏮 Lanterna può dartene una
@@ -165,6 +168,16 @@ regola: una Stella Essiccata in nebbia tira i suoi 3 dadi **due volte** e la neb
 tiene il peggiore dei due risultati (media 4,36 invece di 4,96), non il minimo delle
 sei facce. Un D4 in nebbia resta un D4, media 1,88.
 
+**Come si gioca in nebbia non è «tieni di più».** È la conclusione ovvia e sbagliata,
+e il bot difficile — che è l'unico a conoscere la nebbia — la smentisce: la
+distribuzione in nebbia non è solo più bassa, è **ammucchiata in basso**, quindi dei
+dadi freschi si **appaiano più spesso** (tre dadi nuovi fanno almeno una coppia nel
+**55%** dei casi in nebbia contro il **44%** all'asciutto). E la classifica delle mani
+guarda la **categoria** prima del valore. Misurato su 300 situazioni: sapere della
+nebbia cambia la scelta in circa un terzo dei casi, e nella maggioranza di quelli
+porta a rilanciare **più** dadi, non meno. La correzione serve perché l'EV era
+sbagliato, non perché il bot fosse troppo impaziente.
+
 #### Cosa può assorbire la Spugna
 
 Scegli il bersaglio durante la **scelta rilancio** (passo 5), assieme ai dadi da
@@ -213,10 +226,61 @@ vedere quali 12 dadi ha. La Lanterna è l'unica cosa che te lo mostra.
 non tira e non scegle niente, quindi non sposta la sequenza dei dadi e non toglie
 tempo alla mano.
 
+#### Livello di difficoltà
+
+Dopo aver composto il tuo mazzo, la prima scelta della schermata dell'avversario è
+il **livello**. Muove tre cose insieme:
+
+| Livello | Come gioca il Bot | Posta | Mazzo del Bot |
+| --- | --- | --- | --- |
+| **Facile** | Al rilancio cambia **al massimo 2 dadi** (quindi non ricostruisce mai una mano bruciata), punta sulla mano che **vede** invece di quella che potrebbe raggiungere, e non passa né rilancia mai: paga sempre. | 200 monete, minimo **5**, fino a **2** rilanci per giro | uno speciale **in meno** del tuo |
+| **Normale** | **È il comportamento di sempre**: rilancio scelto a stime campionate, puntata sulla mano raggiungibile, passa le mani deboli quando il prezzo è alto. | 200 monete, minimo **10**, fino a **4** rilanci | **specchiato** (come sempre) |
+| **Difficile** | Valuta il furto **insieme al rilancio che quel furto apre** (il furto normale è miope), calcola il rilancio **esatto** invece di stimarlo, sa che **nella nebbia** un dado vale 2,53 e non 3,50, e rilancia il **doppio**. | 250 monete, minimo **25**, fino a **6** rilanci | uno speciale **in più** |
+
+Tre cose da sapere, perché il codice le fa e la tabella sopra non le dice:
+
+- **Il Bot difficile non vede più di te.** Ogni sua decisione passa dalla stessa
+  vista filtrata di sempre: un dado che il tuo 🦑 Nero di Seppia gli nasconde resta
+  nascosto anche a lui. È più forte perché **calcola meglio**, che è l'unico tipo di
+  «più forte» che valga la pena giocare.
+- **La posta vincola anche te.** Minimo e tetto ai rilanci stanno nella config della
+  partita, quindi su Facile i tuoi incrementi vanno di 5 e il pulsante *Rilancia* si
+  spegne dopo 2 rilanci invece di 4. È il livello, non un bug.
+- **Le monete non decidono il match**: si vince ai punti del Bo3, non per bancarotta
+  (vedi la regola sopra — chi resta a zero gioca comunque la mano, senza scommesse).
+  Quello che la posta cambia davvero è il **cuscino** monete/minimo: 40 minimi su
+  Facile, 20 su Normale, **10** su Difficile. A 10 un paio di piatti grossi ti
+  spogliano — e un seggio senza monete dietro non può più né puntare né bluffare.
+- **L'offset del mazzo non si applica a «Lo compongo io»**: quel mazzo l'hai
+  composto tu e nessun livello lo ritocca. E ai bordi non fa nulla: se il tuo mazzo
+  non ha speciali, Facile non ha niente da togliere.
+
+##### Quanto pesa il livello
+
+`pnpm sim:difficulty` fa giocare due livelli uno contro l'altro **attraverso il
+reducer vero** (un livello non è una mano isolata: è furto, scommesse, passo e Bo3),
+con un Rng-cervello per seggio e i seggi **scambiati a match alterni**.
+
+Misura a **2.000 match per confronto**, seed di default:
+
+| Confronto | Winrate del primo |
+| --- | --- |
+| difficile vs facile | **58,1%** |
+| difficile vs normale | **53,8%** |
+| normale vs facile | **54,3%** |
+
+Controllo (normale vs normale): **49,8%**, cioè ≈50% a meno del rumore. A 2.000
+match il margine d'errore è di circa ±2 punti, quindi tutti e tre i distacchi sono
+reali ma nessuno è schiacciante: il livello **inclina** la partita, non la decide.
+
+Nota cosa questi numeri **non** misurano: solo l'asse della bravura. Due livelli non
+possono imporre entrambi la propria posta a un solo match, quindi il simulatore usa
+quella di default per tutti e due — e il mazzo speciale resta fuori dal confronto.
+
 #### Il mazzo del Bot: tre modalità
 
-Dopo aver composto il tuo mazzo scegli come nasce quello del Bot. In tutti i casi
-**resta nascosto** in partita.
+Dopo il livello scegli come nasce il mazzo del Bot. In tutti i casi **resta
+nascosto** in partita.
 
 | Modalità | Cosa fa |
 | --- | --- |
@@ -229,6 +293,10 @@ Dopo aver composto il tuo mazzo scegli come nasce quello del Bot. In tutti i cas
 `pnpm sim:abilities` fa giocare un loadout con **1 dado speciale** contro quattro
 dadi normali, stessa strategia da entrambe le parti: l'unica variabile sono i
 dadi, quindi lo scostamento da 50% è il contributo dell'abilità.
+
+La strategia in questione è l'euristica condivisa, cioè quella del livello
+**Normale**: questi numeri misurano i dadi, non i livelli. Per i livelli c'è
+`sim:difficulty` sopra.
 
 Misura a **20.000 mani per scenario**, seed di default:
 

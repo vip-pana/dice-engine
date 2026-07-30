@@ -155,14 +155,35 @@ export function drawHandFromDeck(rng: Rng, deck: Deck): Loadout {
  * mirror buffs and maluses separately instead, filter `candidates` by
  * `abilitySpec(id)?.kind` and draw each group to its own count.
  *
+ * `specialsOffset` shifts that count, which is how a difficulty level makes the bot's bag
+ * weaker or stronger without touching how its dice are picked: -1 gives it one fewer special
+ * than you brought, +1 one more. It applies only to a GENERATED deck — a deck someone composed
+ * by hand is never adjusted behind their back.
+ *
  * Lives here rather than in createInitialState because that function is pure and takes no
- * Rng; callers roll the deck first and pass it in. Fixed draw count, so a seed reproduces
- * the bot's deck exactly.
+ * Rng; callers roll the deck first and pass it in. Fixed draw count for a given count, so a
+ * seed reproduces the bot's deck exactly — but note the count is part of what the seed
+ * reproduces: a non-zero offset consumes a different number of shuffle draws, so the SAME seed
+ * yields a different deck at a different difficulty. Same caveat as between the two modes
+ * below, and for the same reason: they are different games.
  */
-export function rollBotDeck(rng: Rng, humanDeck: Deck): Deck {
-  // Clamp rather than throw: the builder UI prevents this, but the engine should not be
-  // brittle if a caller asks for more specials than the registry can supply.
-  return deckOfRandomSpecials(rng, Math.min(specialCount(humanDeck), ALL_ABILITY_IDS.length))
+export function rollBotDeck(rng: Rng, humanDeck: Deck, specialsOffset = 0): Deck {
+  return deckOfRandomSpecials(rng, wantedSpecials(specialCount(humanDeck) + specialsOffset))
+}
+
+/**
+ * Clamps a requested special count into what a deck can actually hold.
+ *
+ * Clamp rather than throw: the builder UI prevents an over-full deck, but the engine should not
+ * be brittle if a caller asks for more specials than the registry can supply — and a difficulty
+ * offset can ask for -1 on a deck that has none.
+ *
+ * The clamping has a consequence worth stating rather than hiding: an offset does NOTHING at the
+ * edges. Against a deck with no specials, a -1 has nothing to remove; against one holding every
+ * registered ability, a +1 has nothing to add. Both cases silently produce the mirrored deck.
+ */
+function wantedSpecials(requested: number): number {
+  return Math.max(0, Math.min(requested, ALL_ABILITY_IDS.length))
 }
 
 /**
@@ -173,12 +194,16 @@ export function rollBotDeck(rng: Rng, humanDeck: Deck): Deck {
  * Dado Lanterna) can only tell them half of what it otherwise would. Here they know neither
  * how many nor which.
  *
+ * `specialsOffset` shifts the drawn count, exactly as in rollBotDeck — the count is random, the
+ * difficulty's thumb on the scale is not.
+ *
  * Rng discipline: consumes ONE draw for the count, then `wanted` for the shuffle — so a seed
  * does NOT produce the same deck as rollBotDeck. Expected, and the same caveat that already
  * applies between the `drops` and `deck` own-dice modes: they are different games.
  */
-export function rollRandomBotDeck(rng: Rng): Deck {
-  return deckOfRandomSpecials(rng, rng.nextInt(0, ALL_ABILITY_IDS.length))
+export function rollRandomBotDeck(rng: Rng, specialsOffset = 0): Deck {
+  const drawn = rng.nextInt(0, ALL_ABILITY_IDS.length)
+  return deckOfRandomSpecials(rng, wantedSpecials(drawn + specialsOffset))
 }
 
 /**

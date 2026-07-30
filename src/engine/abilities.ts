@@ -123,6 +123,31 @@ function keepLowest(rolls: readonly DieValue[]): DieValue {
 }
 
 /**
+ * The face distribution of a PLAIN die rolled in fog: `FOGGED_FACE_WEIGHTS[f - 1]` is the
+ * probability of face `f`. Sums to 1.
+ *
+ * DERIVED from the rule, not written down: it enumerates the 36 pairs and applies the same
+ * `keepLowest` the fogged path in rollDieWithAbility uses, so the numbers cannot drift away
+ * from the fog if the fog ever changes. Writing `(13 - 2f) / 36` by hand would be correct
+ * today and silently wrong the day the fog stops being min-of-two.
+ *
+ * Exported for the exact-EV solver (optimal.ts), which otherwise assumes a uniform 1..6 face
+ * and therefore over-values rerolling in fog: E = 91/36 = 2.528 here against 3.500 clear.
+ * It covers a plain die only — an ability in fog rolls its own rule twice and keeps the worse
+ * result, which is a different distribution per ability and not what this is for.
+ */
+export const FOGGED_FACE_WEIGHTS: readonly number[] = (() => {
+  const counts = [0, 0, 0, 0, 0, 0]
+  for (let a = 1; a <= 6; a++) {
+    for (let b = 1; b <= 6; b++) {
+      const kept = keepLowest([a as DieValue, b as DieValue])
+      counts[kept - 1]! += 1
+    }
+  }
+  return counts.map((c) => c / 36)
+})()
+
+/**
  * First of the rolled faces. Used ONLY by the Dado Paguro's spec, and only as a PLACEHOLDER:
  * the Paguro's real kept face is chosen by the player in PAGURO_SELECT (see handlePaguroChoose
  * in game.ts), not decided here. A spec must return a valid DieValue drawn from `rolls`, and

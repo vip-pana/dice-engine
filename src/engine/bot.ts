@@ -1,9 +1,13 @@
-// Opponent AI as pure logic. chooseAction(state, player, rng) returns a single legal
-// Action for the current phase. It reuses the shared strategy helpers (steal + reroll)
+// Opponent AI as pure logic. chooseAction(state, player, rng, difficulty) returns a single
+// legal Action for the current phase. It reuses the shared strategy helpers (steal + reroll)
 // so the bot plays the same policy the Monte Carlo simulator measures.
 //
-// All betting thresholds are NAMED CONSTANTS grouped in BOT_TUNING, so they are easy to
-// find and re-balance during playtest. The bot is deterministic given the Rng.
+// HOW HARD IT PLAYS is a BotSkill, resolved once from the difficulty in chooseAction and passed
+// down to the handlers (see difficulty.ts, which holds the three profiles and their numbers).
+// The handlers therefore never learn which level they are: they receive behaviours. The default
+// is 'normal', which reproduces the bot exactly as it played before difficulty existed.
+//
+// The bot is deterministic given the Rng.
 
 import {
   chooseStolenDie,
@@ -11,47 +15,24 @@ import {
   chooseTorpedoTarget,
   handScore,
 } from './strategy'
-import { exactRerollEV, optimalReroll } from './optimal'
+import { exactRerollEV, optimalPlay, optimalReroll } from './optimal'
+import { FOGGED_FACE_WEIGHTS } from './abilities'
+import { botSkillFor, type BotSkill, type Difficulty } from './difficulty'
 import type { Rng } from './rng'
 import type { AbilityId, Hand } from './types'
 import type { Action } from './actions'
-import { maxBetFor } from './game'
+import { maxBetFor, seatIsFogged } from './game'
 import { viewFor } from './view'
 import { otherPlayer, type GameState, type PlayerId } from './gameTypes'
 
 /**
- * Tunable bot parameters. These are intentionally simple and named so they can be
- * dialed in during playtest without touching the decision logic below.
+ * The betting thresholds under their historical name: they are now the 'normal' profile's, and
+ * that is the definition of normal rather than a coincidence.
+ *
+ * Kept exported because it was, and because a test asserts on it — renaming it would be churn
+ * in a test that is not about difficulty. New code should ask difficulty.ts instead.
  */
-export const BOT_TUNING = {
-  /**
-   * Second-bet strength gate: at/above this normalized hand strength ([0,1]) the bot
-   * raises; below it, the bot just calls. There is no fold — the bot always sees the bet.
-   */
-  raiseAtLeast: 0.62,
-  /**
-   * Initial bet is blind (before dice are rolled), so the bot plays it flat: it opens /
-   * calls at the minimum and never raises pre-roll. Kept as a flag for clarity.
-   */
-  raiseOnInitialBet: false,
-  /**
-   * Second-bet fold gate: at/below this normalized strength the bot will consider folding
-   * rather than paying. Only applies in SECOND_BET while facing a bet, the only spot where
-   * folding is legal.
-   */
-  foldBelow: 0.3,
-  /**
-   * ...and only when the call costs at least this fraction of its remaining stack. Without
-   * a price gate the bot would fold weak hands to trivial bets, which plays as needlessly
-   * timid and hands the human free pots.
-   *
-   * Calibrated against actual play: at the default 200 stack / 10 minimum bet, the price
-   * of a second-round call is ~5% of stack typically and 12.5% at the observed maximum, so
-   * anything above that makes the rule dead code. 10% means the bot folds weak hands only
-   * to bets that are genuinely large for it — which is what a human raising big wants.
-   */
-  foldWhenPriceOverStack: 0.1,
-} as const
+export const BOT_TUNING: BotSkill = botSkillFor('normal')
 
 /**
  * Normalizes a hand's handScore into [0, 1] so thresholds are readable.
@@ -81,6 +62,10 @@ function opponentIsAllIn(state: GameState, player: PlayerId): boolean {
  *  - cannot afford the raise -> call instead. This bot has no all-in strategy, and
  *    shoving its whole stack on a minimum-raise impulse is worse than matching.
  *  - opponent already all-in -> call, since a raise cannot be contested.
+ *
+ * Every bet at every difficulty still comes through here, which is what keeps "no negative
+ * bankroll" and "never raise into an all-in" true at all three levels for free: the skill knobs
+ * choose amounts and gates, they never bypass this clamp.
  */
 function betOrCall(
   state: GameState,
@@ -97,6 +82,21 @@ function betOrCall(
     return type === 'OPEN' ? { type: 'OPEN', player, amount: max } : { type: 'CALL', player }
   }
   return type === 'OPEN' ? { type: 'OPEN', player, amount } : { type: 'RAISE', player, amount }
+}
+
+/**
+ * The total this skill wants to raise to, falling back to a single min-raise when it cannot
+ * afford its preferred size.
+ *
+ * The fallback is not politeness, it is a correctness fix: betOrCall above downgrades an
+ * unaffordable RAISE to a CALL, so a profile that asks for two min-raises would end up CALLING
+ * in spots where the one-raise profile RAISES — a "stronger" bot playing more passively, and
+ * worst on exactly the short stacks that high stakes produce. Asking for less first keeps the
+ * aggression; betOrCall still applies the real ceiling.
+ */
+function raiseTo(state: GameState, player: PlayerId, skill: BotSkill, base: number): number {
+  const wanted = base + skill.raiseMultiple * state.config.minBet
+  return wanted <= maxBetFor(state, player) ? wanted : base + state.config.minBet
 }
 
 function normalizedStrength(hand: Hand): number {
@@ -129,8 +129,19 @@ function currentHand(state: GameState, player: PlayerId): Hand | null {
  * Chooses a single legal action for `player` given the current phase.
  * Throws if asked to act when it is not the player's turn (defensive; the caller should
  * only invoke this when state.toAct === player).
+ *
+ * `difficulty` selects HOW WELL it plays, and defaults to 'normal' — the profile that is
+ * defined as "the bot before difficulty existed", so every existing caller keeps the behaviour
+ * it had. It is a parameter rather than a field on GameState for two reasons: the reducer would
+ * never read it, and a state-level field would force BOTH seats to the same level, which makes
+ * a hard-versus-easy comparison impossible to even express.
  */
-export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Action {
+export function chooseAction(
+  state: GameState,
+  player: PlayerId,
+  rng: Rng,
+  difficulty: Difficulty = 'normal',
+): Action {
   // ROLL_OFF and HAND_COMPLETE are system transitions with no per-player turn.
   if (state.phase === 'ROLL_OFF') {
     return { type: 'ROLL_OFF' }
@@ -148,6 +159,9 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
   // the ability would only work in one direction and the bot would be quietly cheating.
   // Filtering once here covers all four decision paths.
   const seen = viewFor(state, player)
+  // The one line in this file that knows the difficulty table exists. Everything below is
+  // parameterized by BEHAVIOUR, so a handler can be tested without naming a level.
+  const skill = botSkillFor(difficulty)
 
   // Switch on the already-narrowed `state.phase` (ROLL_OFF/HAND_COMPLETE returned above),
   // but pass `seen` to every handler.
@@ -160,17 +174,17 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
   // therefore dead weight for the bot, which is a real and accepted asymmetry.
   switch (state.phase) {
     case 'INITIAL_BET':
-      return chooseInitialBet(seen, player)
+      return chooseInitialBet(seen, player, skill)
     case 'STEAL':
-      return chooseSteal(seen, player)
+      return chooseSteal(seen, player, skill)
     case 'REROLL_SELECT':
-      return chooseReroll(seen, player, rng)
+      return chooseReroll(seen, player, rng, skill)
     case 'MULINELLO_SELECT':
-      return chooseMulinello(seen, player)
+      return chooseMulinello(seen, player, skill)
     case 'PAGURO_SELECT':
       return choosePaguro(seen, player, rng)
     case 'SECOND_BET':
-      return chooseSecondBet(seen, player)
+      return chooseSecondBet(seen, player, skill)
     case 'SHOWDOWN':
     case 'MATCH_OVER':
       throw new Error(`[bot] no action to take in phase ${state.phase}`)
@@ -179,20 +193,24 @@ export function chooseAction(state: GameState, player: PlayerId, rng: Rng): Acti
 
 // --- INITIAL_BET (blind) ---
 
-function chooseInitialBet(state: GameState, player: PlayerId): Action {
+function chooseInitialBet(state: GameState, player: PlayerId, skill: BotSkill): Action {
   // Primary opens at the minimum; non-primary calls. Blind, so keep it flat.
   if (player === state.primary && state.aggressor === null) {
     return betOrCall(state, player, 'OPEN', state.config.minBet)
   }
-  if (BOT_TUNING.raiseOnInitialBet && state.raisesThisWindow < state.config.maxRaisesPerWindow) {
-    return betOrCall(state, player, 'RAISE', state.currentBet + state.config.minBet)
+  if (
+    skill.raises &&
+    skill.raiseOnInitialBet &&
+    state.raisesThisWindow < state.config.maxRaisesPerWindow
+  ) {
+    return betOrCall(state, player, 'RAISE', raiseTo(state, player, skill, state.currentBet))
   }
   return { type: 'CALL', player }
 }
 
-// --- STEAL: greedy best common die ---
+// --- STEAL: the best common die, by this skill's definition of "best" ---
 
-function chooseSteal(state: GameState, player: PlayerId): Action {
+function chooseSteal(state: GameState, player: PlayerId, skill: BotSkill): Action {
   const own = state.hands[player].own
   if (own === null || state.common === null) {
     throw new Error('[bot] steal requested before dice rolled')
@@ -201,19 +219,42 @@ function chooseSteal(state: GameState, player: PlayerId): Action {
   const availableIndices = [0, 1, 2].filter((i) => !state.stolenCommonIndices.includes(i))
   const availableDice = availableIndices.map((i) => state.common![i]!)
 
-  // Greedy pick via the shared helper; map its local index back to the original index.
-  const { index: localIndex } = chooseStolenDie(own, availableDice)
+  // Both policies return a LOCAL index into availableDice, mapped back below.
+  //
+  // 'joint' is the exact solver (optimalPlay), which prices each candidate steal together with
+  // the reroll that steal would open — where 'greedy' maximizes the five dice as they stand and
+  // cannot see the reroll coming at all. Same filtered view either way: this is a bot that
+  // calculates better, not one that knows more.
+  const localIndex =
+    skill.steal === 'joint'
+      ? optimalPlay(own, availableDice, skill.maxReroll, fogWeights(state, player, skill))
+          .stealIndex
+      : chooseStolenDie(own, availableDice).index
   return { type: 'STEAL', player, commonIndex: availableIndices[localIndex]! }
 }
 
 // --- REROLL_SELECT: reuse shared heuristic ---
 
-function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
+function chooseReroll(
+  state: GameState,
+  player: PlayerId,
+  rng: Rng,
+  skill: BotSkill,
+): Action {
   const h = state.hands[player]
   if (h.own === null || h.stolen === null) {
     throw new Error('[bot] reroll requested before steal')
   }
-  const indices = chooseRerollIndices(h.own, h.stolen, rng)
+  // 'exact' enumerates every outcome instead of sampling 60 per keep-set, which also makes the
+  // hard bot play and BET off the same number (prospectiveStrength already prices with
+  // optimalReroll) — it removes an internal disagreement rather than adding a feature. Note it
+  // consumes ZERO Rng draws where 'sampled' consumes ~60 per keep-set: harmless in the app,
+  // where the bot has its own brain Rng, but any bot-vs-bot harness comparing two levels must
+  // give each seat its own or the comparison is confounded.
+  const indices =
+    skill.reroll === 'exact'
+      ? optimalReroll(h.own, h.stolen, skill.maxReroll, fogWeights(state, player, skill)).rerollIdx
+      : chooseRerollIndices(h.own, h.stolen, rng, skill.rerollSamples, skill.maxReroll)
 
   // Holding a Torpedo makes the target mandatory (the reducer asserts it), so it is chosen
   // here in the same action. `state` is already the filtered view, so a die the bot cannot
@@ -224,12 +265,19 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
   // di Seppia and the Dado d'Oro. Teaching the reroll heuristic about pending effects is a
   // separate change.
   //
-  // It is also blind to FOG: in a Dado Brumeggio's fog a fresh die averages 2.53 rather than
-  // 3.50, so the bot rerolls more than it should (it should keep more). Bounded and
-  // one-directional — the heuristic is an argmax over keep-sets, and the fog scales every
-  // candidate by the same factor, so it misjudges keep-vs-reroll rather than which dice to
-  // pick. Joins the same documented list as the Stella and the D4, which exactRerollEV has
-  // always mispriced for the same reason.
+  // FOG is now a per-skill matter rather than a flat blind spot: `fogAware` skills pass the true
+  // face distribution into the exact EV (see fogWeights below), while the sampled path stays
+  // blind, since its estimates come from the Rng rather than from a distribution it could be told
+  // about. The Stella and the D4 remain mispriced at every level, for the reason exactRerollEV
+  // documents.
+  //
+  // Worth stating because the obvious guess is wrong: fog does NOT simply mean "keep more". A
+  // fogged face averages 2.53 against 3.50, but the fogged distribution is also concentrated on
+  // the low faces, so a handful of fresh dice PAIR UP far more often (three fresh dice make at
+  // least a pair 55% of the time in fog against 44% clear) — and handScore ranks by category
+  // before face value. Measured over 300 seeded spots, fog-aware play changed the keep-set in
+  // about a third of them, and it rerolled MORE dice rather than fewer in the majority of those.
+  // The correction is worth making because the EV is wrong, not because the bot was too eager.
   const victim = otherPlayer(player)
   const victimHand = state.hands[victim]
   const sponge = chooseSponge(state, player)
@@ -241,6 +289,27 @@ function chooseReroll(state: GameState, player: PlayerId, rng: Rng): Action {
     return { ...withSponge, torpedoTarget: target }
   }
   return withSponge
+}
+
+/**
+ * The face distribution this seat's next roll will actually follow, or undefined for a plain
+ * uniform die — which is what every EV in this file assumed at every level before now.
+ *
+ * Only a `fogAware` skill gets the correction, and only while it really is fogged. Passing the
+ * weights is legitimate rather than a peek: a Brumeggio is PUBLIC information, and stays so even
+ * through a Nero di Seppia (view.ts keeps `ability` visible on a masked die), so this reads
+ * nothing the human cannot see. `state` here is always the filtered view.
+ *
+ * The correction covers a PLAIN face. A Stella or a D4 in fog follows its own rule twice and
+ * keeps the worse result, which is a different distribution per ability — those stay mispriced,
+ * exactly as exactRerollEV says they are.
+ */
+function fogWeights(
+  state: GameState,
+  player: PlayerId,
+  skill: BotSkill,
+): readonly number[] | undefined {
+  return skill.fogAware && seatIsFogged(state, player) ? FOGGED_FACE_WEIGHTS : undefined
 }
 
 /**
@@ -324,13 +393,15 @@ function holdsAbility(hand: GameState['hands'][PlayerId], ability: AbilityId): b
  * all 6 faces, and `handScore` prices standing pat. Both are the same metric the solver and
  * the reroll heuristic already use, so the bot cannot drift away from them.
  *
- * Three known limits, all inherited rather than introduced. `state` is the filtered view, so a
- * Mulinello concealed by the human's Nero di Seppia is priced from its masked face — the same
- * blind spot chooseReroll has. The EV ignores a pending Torpedo, exactly as noted above. And a
- * third roll taken in a Brumeggio's fog is priced as a clean d6 when it will actually average
- * 2.53, so the bot takes the roll in some spots where keeping was better.
+ * Identical at every difficulty, and that is a decision: nerfing it would mean inventing a wrong
+ * Mulinello rule, and a bot visibly declining a free improving roll reads as a bug rather than
+ * as easy mode. The only thing the skill changes here is whether the EV knows about fog.
+ *
+ * Two known limits remain, both inherited rather than introduced. `state` is the filtered view,
+ * so a Mulinello concealed by the human's Nero di Seppia is priced from its masked face — the
+ * same blind spot chooseReroll has. And the EV ignores a pending Torpedo, exactly as noted above.
  */
-function chooseMulinello(state: GameState, player: PlayerId): Action {
+function chooseMulinello(state: GameState, player: PlayerId, skill: BotSkill): Action {
   const h = state.hands[player]
   if (h.own === null || h.stolen === null) {
     throw new Error('[bot] Mulinello requested before the dice were rolled')
@@ -345,7 +416,7 @@ function chooseMulinello(state: GameState, player: PlayerId): Action {
   }
 
   const keep = handScore([h.own[0], h.own[1], h.own[2], h.own[3], h.stolen])
-  const reroll = exactRerollEV(h.own, h.stolen, [index])
+  const reroll = exactRerollEV(h.own, h.stolen, [index], fogWeights(state, player, skill))
   return reroll > keep
     ? { type: 'MULINELLO_ROLL', player }
     : { type: 'MULINELLO_PASS', player }
@@ -385,51 +456,64 @@ function choosePaguro(_state: GameState, player: PlayerId, rng: Rng): Action {
  *
  * The `rerollSelection` branch is for the case where a selection somehow already exists (it does
  * not in the current phase order): then the choice is made and only THAT reroll should be priced.
+ *
+ * A `betsOn: 'current-hand'` skill deliberately skips all of that and prices the visible faces.
+ * That is not an arbitrary handicap — it is precisely the error described two paragraphs up, so
+ * an easy bot under-bets the busted hands a reroll would rescue and over-bets the pretty ones,
+ * which is the mistake a beginner actually makes and one a human can learn to read.
  */
-function prospectiveStrength(state: GameState, player: PlayerId, hand: Hand): number {
+function prospectiveStrength(
+  state: GameState,
+  player: PlayerId,
+  hand: Hand,
+  skill: BotSkill,
+): number {
   const h = state.hands[player]
-  if (h.own === null || h.stolen === null) {
+  if (skill.betsOn === 'current-hand' || h.own === null || h.stolen === null) {
     return normalizedStrength(hand)
   }
+  const weights = fogWeights(state, player, skill)
   const chosen = h.rerollSelection
   if (chosen !== null) {
-    return normalizeScore(exactRerollEV(h.own, h.stolen, chosen))
+    return normalizeScore(exactRerollEV(h.own, h.stolen, chosen, weights))
   }
-  return normalizeScore(optimalReroll(h.own, h.stolen).ev)
+  return normalizeScore(optimalReroll(h.own, h.stolen, skill.maxReroll, weights).ev)
 }
 
-function chooseSecondBet(state: GameState, player: PlayerId): Action {
+function chooseSecondBet(state: GameState, player: PlayerId, skill: BotSkill): Action {
   const hand = currentHand(state, player)
   if (hand === null) {
     throw new Error('[bot] second bet requested before hand is formed')
   }
-  const strength = prospectiveStrength(state, player, hand)
+  const strength = prospectiveStrength(state, player, hand, skill)
   const canRaise = state.raisesThisWindow < state.config.maxRaisesPerWindow
-  const wantsRaise = strength >= BOT_TUNING.raiseAtLeast && canRaise
+  const wantsRaise = skill.raises && strength >= skill.raiseAtLeast && canRaise
 
   // No bet on the table yet: the bot (as primary) MUST open (no check). It opens at the
   // minimum, or higher when its hand is strong.
   if (state.aggressor === null) {
     const min = state.firstBetAmount // second-bet minimum
-    const amount = wantsRaise ? min + state.config.minBet : min
+    const amount = wantsRaise ? raiseTo(state, player, skill, min) : min
     return betOrCall(state, player, 'OPEN', amount)
   }
 
   // Facing a bet: raise when strong.
   if (wantsRaise) {
-    return betOrCall(state, player, 'RAISE', state.currentBet + state.config.minBet)
+    return betOrCall(state, player, 'RAISE', raiseTo(state, player, skill, state.currentBet))
   }
 
   // Weak hand facing a bet it has to pay for: fold rather than pay off a big bet.
   // Gated on the price being meaningful relative to the stack, so the bot does not fold
-  // to a token bet it could call for almost nothing.
+  // to a token bet it could call for almost nothing. A skill with `folds: false` never gets
+  // here — it is a calling station by design, and pays off every value bet.
   const owed = state.currentBet - state.hands[player].committed
   const stack = state.bankroll[player]
   const priceRatio = stack > 0 ? owed / stack : 0
   if (
+    skill.folds &&
     owed > 0 &&
-    strength <= BOT_TUNING.foldBelow &&
-    priceRatio >= BOT_TUNING.foldWhenPriceOverStack
+    strength <= skill.foldBelow &&
+    priceRatio >= skill.foldWhenPriceOverStack
   ) {
     return { type: 'FOLD', player }
   }
