@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
-import { abilitySpec, type AbilityId, type DieValue } from '../../engine'
+import { abilitySpec, type AbilityId, type AbilitySpec, type DieValue } from '../../engine'
+import { useDieTooltip, type DieInfo } from './DieTooltip'
 
 // Placeholder die rendering: pips drawn with CSS, no assets. Standard d6 pip layout.
 
@@ -121,24 +122,44 @@ export function DieView(props: DieViewProps): JSX.Element {
       ? `3px solid ${accent}`
       : '2px solid #334155'
 
+  // Hover it, or hold it down on a phone, and the die says what it is. This replaced the `title`
+  // attribute that used to carry the same text: a native tooltip is mouse-only (a phone never
+  // shows one at all), it truncates, and it cannot be styled to look like it belongs to the die.
+  const tip = useDieTooltip(dieInfo({ spec, value, concealed, blindedToOpponent, split, accent }))
+
   return (
     <div
       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}
     >
-      <div style={{ position: 'relative' }}>
+      <div
+        {...tip.trigger}
+        style={{
+          position: 'relative',
+          // `manipulation` (not `none`) so the page still scrolls from a die: it only drops the
+          // double-tap zoom, whose 300ms wait competes with the hold gesture.
+          touchAction: 'manipulation',
+          // A hold on selectable text is a "select word" gesture on both mobile platforms, and
+          // the selection highlight would appear under our panel.
+          userSelect: 'none',
+          WebkitTouchCallout: 'none',
+        }}
+      >
         <button
           type="button"
-          onClick={onClick}
-          disabled={!clickable}
-          title={
-            concealed
-              ? 'Dado nascosto dal Nero di Seppia — lo vedrai allo showdown'
-              : blindedToOpponent
-                ? 'Il tuo Nero di Seppia acceca questo dado: il Bot non ne conosce il valore'
-                : spec !== null
-                  ? `${spec.name} — ${spec.description}`
-                  : undefined
+          onClick={
+            clickable
+              ? () => {
+                  // A hold that opened the panel still ends in a click. Stealing a die because
+                  // the player asked what it does would be the worst possible reading of it.
+                  if (tip.consumeHold()) {
+                    return
+                  }
+                  onClick?.()
+                }
+              : undefined
           }
+          disabled={!clickable}
+          aria-describedby={tip.describedBy}
           aria-label={
             (concealed ? 'Dado nascosto' : `Dado ${value}`) +
             (!concealed && spec !== null ? `, abilità ${spec.name}` : '') +
@@ -156,6 +177,12 @@ export function DieView(props: DieViewProps): JSX.Element {
             padding,
             borderRadius: radius,
             border,
+            // MOST dice on the table are not clickable, and a disabled button receives no
+            // pointer events at all — nor do they bubble out of it — so the hover and the hold
+            // would only work on the two or three dice that happen to be actionable. Letting
+            // them through hands every event to the wrapper above, which is where the gesture
+            // is handled. `disabled` stays: it is what tells a screen reader the die is inert.
+            pointerEvents: clickable ? undefined : 'none',
             background: concealed ? '#241b3d' : dimmed ? '#1e293b' : '#f8fafc',
             opacity: dimmed ? 0.4 : 1,
             cursor: clickable ? 'pointer' : 'default',
@@ -240,6 +267,8 @@ export function DieView(props: DieViewProps): JSX.Element {
             🦑
           </span>
         )}
+
+        {tip.panel}
       </div>
 
       {split !== null && <SplitRolls rolls={split} kept={value} accent={accent} />}
@@ -263,6 +292,64 @@ export function DieView(props: DieViewProps): JSX.Element {
       )}
     </div>
   )
+}
+
+/** What a plain d6 says about itself when there is no ability to describe. */
+const PLAIN_DIE = {
+  name: 'Dado normale',
+  description: 'Un dado a sei facce, senza abilità: vale la faccia che mostra.',
+} as const
+
+/**
+ * Everything this die can tell the player, assembled for the tooltip.
+ *
+ * The rules text is the ability registry's own `description` — never a second wording of it
+ * here — so a rebalanced ability explains itself correctly without a UI edit. What this adds is
+ * the part that is not in the registry because it is about THIS die right now: whether it is a
+ * bonus or a malus, that its face is hidden (or hidden from the Bot), and which faces the roll
+ * actually produced.
+ */
+function dieInfo({
+  spec,
+  value,
+  concealed,
+  blindedToOpponent,
+  split,
+  accent,
+}: {
+  spec: AbilitySpec | null
+  value: DieValue
+  concealed: boolean
+  blindedToOpponent: boolean
+  split: readonly DieValue[] | null
+  accent: string
+}): DieInfo {
+  const notes: string[] = []
+  if (spec !== null) {
+    notes.push(spec.kind === 'malus' ? 'Malus' : 'Bonus')
+  }
+  if (concealed) {
+    notes.push('🦑 Nascosto dal Nero di Seppia del Bot: vedrai la faccia allo showdown.')
+  }
+  if (blindedToOpponent) {
+    notes.push('🦑 Il tuo Nero di Seppia lo acceca: il Bot non ne conosce il valore.')
+  }
+  // Spells out the mini-chips under the die, which are otherwise a row of numbers you have to
+  // guess the meaning of — and it is the only place the fog on a PLAIN die is ever explained,
+  // since a fogged die carries two faces and no ability of its own to describe.
+  if (split !== null && !concealed) {
+    notes.push(`Tirati ${split.join(' · ')} — tenuto ${value}.`)
+  }
+
+  return {
+    icon: concealed && spec === null ? '?' : spec?.icon,
+    name: spec?.name ?? (concealed ? 'Dado nascosto' : PLAIN_DIE.name),
+    description:
+      spec?.description ??
+      (concealed ? 'Un dado normale, ma non sai che faccia mostra.' : PLAIN_DIE.description),
+    notes,
+    accent,
+  }
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
-import { abilitySpec, type Deck } from '../../engine'
+import { abilitySpec, type AbilityId, type Deck } from '../../engine'
 import { useIsPhone } from '../responsive'
+import { useDieTooltip } from './DieTooltip'
 import { accentForAbility } from './DieView'
 
 /**
@@ -61,39 +62,42 @@ export function DeckPreview({ deck, variant = 'full' }: DeckPreviewProps): JSX.E
         maxWidth: columns * size + (columns - 1) * gap,
       }}
     >
-      {deck.map((id, i) => {
-        const spec = abilitySpec(id)
+      {deck.map((id, i) => (
         // Slot index is the identity: the same ability never appears twice, and plain slots
         // are interchangeable.
-        return (
-          <DeckSlot
-            key={i}
-            icon={spec?.icon}
-            accent={spec === null ? null : accentForAbility(spec.id)}
-            label={spec?.name ?? 'normale'}
-            size={size}
-            showLabel={variant === 'full'}
-          />
-        )
-      })}
+        <DeckSlot key={i} ability={id} size={size} showLabel={variant === 'full'} />
+      ))}
     </div>
   )
 }
 
 /** One unrolled die in the deck: its badge if special, an empty face either way. */
 function DeckSlot({
-  icon,
-  accent,
-  label,
+  ability,
   size,
   showLabel,
 }: {
-  icon: string | undefined
-  accent: string | null
-  label: string
+  ability: AbilityId | null
   size: number
   showLabel: boolean
 }): JSX.Element {
+  const spec = abilitySpec(ability)
+  const accent = spec === null ? null : accentForAbility(spec.id)
+  const label = spec?.name ?? 'normale'
+  // Same hover/hold panel as a die on the table. It matters most in the COMPACT variant: there
+  // the slot is a 32px icon with no room for a name, and since the sidebar no longer carries a
+  // catalogue of every ability, this is where you check what you brought to the match.
+  const tip = useDieTooltip({
+    icon: spec?.icon,
+    name: spec?.name ?? 'Dado normale',
+    description: spec?.description ?? 'Un dado a sei facce, senza abilità.',
+    notes:
+      spec === null
+        ? ['Nel mazzo — non ancora tirato.']
+        : [spec.kind === 'malus' ? 'Malus' : 'Bonus', 'Nel mazzo — non ancora tirato.'],
+    accent: accent ?? '#334155',
+  })
+
   return (
     // `alignSelf: start` so a two-line label (e.g. "Stella Essiccata") does not push its
     // grid row taller than the others and knock the two rows out of alignment.
@@ -107,9 +111,10 @@ function DeckSlot({
       }}
     >
       <div
-        aria-label={`Dado ${label}`}
-        // The name is the tooltip in compact mode, where it is not printed.
-        title={showLabel ? undefined : label}
+        {...tip.trigger}
+        // The ability names already begin with "Dado", so no prefix here — this used to read
+        // "Dado Dado Stella Essiccata" to a screen reader.
+        aria-label={spec?.name ?? 'Dado normale'}
         style={{
           // Fills its track but never grows past its nominal size, and stays square via
           // aspect-ratio. The old `width: size` + `flexShrink: 0` made the slot an immovable
@@ -127,9 +132,15 @@ function DeckSlot({
           justifyContent: 'center',
           fontSize: Math.round(size * 0.42),
           boxShadow: accent === null ? undefined : `0 0 10px ${accent}44`,
+          // See DieView: `manipulation` keeps the page scrollable while dropping the double-tap
+          // delay, and a hold must not turn into a text selection.
+          touchAction: 'manipulation',
+          userSelect: 'none',
+          WebkitTouchCallout: 'none',
         }}
       >
-        {icon ?? ''}
+        {spec?.icon ?? ''}
+        {tip.panel}
       </div>
       {showLabel && (
         <span

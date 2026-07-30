@@ -371,7 +371,22 @@ function ReferenceStack({
   children: ReactNode
 }): JSX.Element {
   const stack = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>{children}</div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        minWidth: 0,
+        // Fill the column (the aside is a stretched grid item) rather than sizing to content.
+        // Without this the panels inside cannot grow either — their `flex: 1` resolves against
+        // a container that is already exactly as tall as they are — and the sidebar ends in dead
+        // space with the log squeezed to its natural height. It shows now that one panel fewer
+        // is stacked here; the folded phone layout has no column height to fill, so it opts out.
+        ...(phone ? null : { flex: '1 1 auto', minHeight: 0 }),
+      }}
+    >
+      {children}
+    </div>
   )
   if (!phone) {
     return stack
@@ -682,28 +697,22 @@ function DeckPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Reference panel: the two static rule references, on tabs
+// Reference panel: the hand ranking ladder
 // ---------------------------------------------------------------------------
 
-const REFERENCE_TABS = ['abilities', 'ranking'] as const
-type ReferenceTab = (typeof REFERENCE_TABS)[number]
-
-const REFERENCE_TAB_LABEL: Record<ReferenceTab, string> = {
-  abilities: 'Dadi speciali',
-  ranking: 'Classifica mani',
-}
-
 /**
- * Holds the game's two rules references — the special-dice catalogue and the hand ranking
- * ladder — in one tabbed panel.
+ * The hand ranking ladder — the one static rules reference the sidebar still carries.
  *
- * Tabs rather than two stacked panels because the sidebar is height-bound: both references
- * are tall and fixed-height, and stacking them left ActionLog's `flex: 1` with literally
- * zero pixels, so the log vanished. One at a time keeps the log readable.
+ * It used to share this panel, on tabs, with a catalogue of all ten special dice. The
+ * catalogue is gone: a die now explains itself when you hover it or hold it down (see
+ * DieTooltip), which puts the same rules text on the die you are already looking at instead of
+ * in a list you had to match up by icon — and reading it no longer costs the panel switch that
+ * hid the ladder. Nothing was lost with it: the deck builder still lists every ability in full
+ * before the match, and the dice on the felt, the commons and your deck slots in this column
+ * all carry their own text now.
  *
- * Both are static reference material you consult and leave, never per-turn state, so the
- * cost of hiding one is low — and neither is on the critical path of a decision (the dice
- * themselves carry their ability badge; the live hand has its own "Mano attuale" badge).
+ * The ladder has no such home — it is about five dice at once, not one — so it stays, and with
+ * one reference left the tabs went with the catalogue.
  */
 function ReferencePanel({
   state,
@@ -713,10 +722,7 @@ function ReferencePanel({
   /** Share the bounded sidebar height with the log instead of sizing to content. */
   grow?: boolean
 }): JSX.Element {
-  const [tab, setTab] = useState<ReferenceTab>('abilities')
   const phone = useIsPhone()
-  // Accent follows the active tab so the panel border keeps signalling what you're reading.
-  const accent = tab === 'abilities' ? `${ABILITY_ACCENT}44` : '#1e293b'
 
   return (
     <section
@@ -724,7 +730,7 @@ function ReferencePanel({
         padding: 14,
         borderRadius: 12,
         background: '#0b1220',
-        border: `1px solid ${accent}`,
+        border: '1px solid #1e293b',
         minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
@@ -737,38 +743,17 @@ function ReferencePanel({
         ...(grow ? { flex: '1 1 0', minHeight: 0 } : null),
       }}
     >
-      <div role="tablist" aria-label="Riferimenti" style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
-        {REFERENCE_TABS.map((id) => {
-          const active = id === tab
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTab(id)}
-              style={{
-                flex: 1,
-                padding: '6px 8px',
-                // These were the smallest tap targets in the app at ~26px tall. They are the
-                // only way to switch reference, so they have to be thumb-sized.
-                minHeight: 44,
-                borderRadius: 8,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                fontSize: 13,
-                fontWeight: 700,
-                letterSpacing: 0.3,
-                background: active ? '#111c31' : 'transparent',
-                color: active ? (id === 'abilities' ? ABILITY_ACCENT : '#e2e8f0') : '#64748b',
-                border: `1px solid ${active ? '#334155' : 'transparent'}`,
-              }}
-            >
-              {REFERENCE_TAB_LABEL[id]}
-            </button>
-          )
-        })}
-      </div>
+      <h2
+        style={{
+          margin: '0 0 8px',
+          fontSize: 14,
+          fontWeight: 700,
+          color: '#94a3b8',
+          letterSpacing: 0.3,
+        }}
+      >
+        Classifica mani
+      </h2>
 
       <div
         style={{
@@ -780,7 +765,7 @@ function ReferencePanel({
           ...(grow ? { flex: 1 } : phone ? null : { maxHeight: 340 }),
         }}
       >
-        {tab === 'abilities' ? <AbilityReference state={state} /> : <RankingReference state={state} />}
+        <RankingReference state={state} />
       </div>
     </section>
   )
@@ -820,69 +805,6 @@ function RankingReference({ state }: { state: GameState }): JSX.Element {
 function categoryOf(hand: PlayerHandState): HandCategory | null {
   const live = liveFinalHand(hand)
   return live === null ? null : evaluateHand(live).category
-}
-
-/**
- * The catalogue of every special die in the game.
- *
- * Driven by ALL_ABILITY_IDS, not by the drop pool, so a newly registered ability shows up
- * here the moment it is added to abilities.ts — no UI edit required. Abilities excluded
- * from the current drop pool are still listed but marked inactive, which makes an
- * accidentally-empty pool visible rather than silent.
- *
- * It is a rules reference, not a per-seat inventory: with random drops a loadout changes
- * every hand, so "what Tu has" would be stale by the next hand. The dice themselves carry
- * the badge that says who got what.
- */
-function AbilityReference({ state }: { state: GameState }): JSX.Element {
-  const { ownChance, commonChance, pool } = state.abilityDrops
-  const dropsOn = ownChance > 0 || commonChance > 0
-
-  // In deck mode `ownChance` does nothing, so printing it would state a rule that is not in
-  // force. Read the MODE, and mark abilities active by what is actually in the deck.
-  const deck = state.decks.human
-  const deckMode = state.ownDiceSource.human.kind === 'deck' && deck !== null
-  const inDeck = deckMode ? deckSpecials(deck) : []
-  const drawChance = Math.round((HAND_SIZE / DECK_SIZE) * 100)
-  const isActive = (id: AbilityId): boolean =>
-    deckMode ? inDeck.includes(id) : dropsOn && pool.includes(id)
-
-  return (
-    <>
-      <p style={{ margin: '0 0 12px', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-        {deckMode ? (
-          <>
-            Peschi {HAND_SIZE} dadi su {DECK_SIZE} dal tuo mazzo a ogni mano: ogni speciale
-            nel mazzo esce in circa {drawChance}% delle mani.
-            {commonChance > 0 && <> Tra i comuni può uscirne uno al {pct(commonChance)}.</>}
-          </>
-        ) : dropsOn ? (
-          <>
-            Ogni tipo può uscire al massimo una volta: {pct(ownChance)} in mano,{' '}
-            {pct(commonChance)} tra i comuni. Si ripescano a ogni mano.
-          </>
-        ) : (
-          'Estrazioni disattivate: si gioca con soli dadi normali.'
-        )}
-      </p>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {ALL_ABILITY_IDS.map((id) => (
-          <AbilityCard
-            key={id}
-            id={id}
-            active={isActive(id)}
-            inactiveNote={deckMode ? 'non nel tuo mazzo' : 'non in gioco'}
-          />
-        ))}
-      </div>
-    </>
-  )
-}
-
-/** Formats a 0..1 probability as a whole-percent label. */
-function pct(chance: number): string {
-  return `${Math.round(chance * 100)}%`
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,6 +1030,18 @@ function Table({
           />
         </Band>
       </div>
+
+      {/*
+        The gesture has to be told, once: a hover has no affordance and a hold even less. It sits
+        under the felt rather than in the sidebar because that is where the dice are, and it is
+        worded per input — "passa il mouse" on a phone would be advice for hardware the player
+        does not have.
+      */}
+      <p style={{ margin: '10px 0 0', fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        {phone
+          ? 'Tieni premuto un dado per leggere nome e abilità.'
+          : 'Passa il mouse su un dado per leggerne nome e abilità.'}
+      </p>
     </section>
   )
 }

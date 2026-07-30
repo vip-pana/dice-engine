@@ -97,6 +97,13 @@ Se nessuno dei due ha più monete da puntare, le finestre di scommessa vengono
 I dadi del bot sono sempre visibili. Il badge accanto ai dadi mostra la categoria
 della mano attuale in tempo reale.
 
+**Ogni dado si spiega da sé:** passaci il mouse sopra — o, su telefono, tienilo
+premuto — e appare una tendina con nome, regola e Bonus/Malus del dado, comprese le
+note sul momento (faccia nascosta dal Nero di Seppia, facce tirate e tenuta). Vale
+anche per gli slot del mazzo nella colonna a destra. È il motivo per cui in partita
+non c'è più un catalogo di tutte le abilità: la regola sta sul dado che stai
+guardando.
+
 ### Mazzo
 
 Prima del match scegli i **12 dadi** del tuo mazzo, che resta fisso per tutta la
@@ -120,7 +127,8 @@ partita. A ogni mano ne vengono pescati **4 a caso**: quelli sono i tuoi dadi.
 
 Ogni speciale è una voce del registro in
 [`src/engine/abilities.ts`](src/engine/abilities.ts); la schermata del mazzo ne
-mostra nome, icona e regola.
+mostra nome, icona e regola, e in partita la stessa regola esce dal dado stesso
+(mouse sopra, o dito premuto).
 
 | Dado | Effetto | Se resta tra i comuni |
 | --- | --- | --- |
