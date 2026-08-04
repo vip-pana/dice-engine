@@ -25,6 +25,14 @@ export interface DeckPreviewProps {
    * names would not fit and the icons alone carry the meaning.
    */
   readonly variant?: 'full' | 'compact'
+  /**
+   * Whether each slot explains itself on hover / long press. Defaults to true.
+   *
+   * Pass false when the preview is rendered inside an overlay: the tooltip is a portal at zIndex
+   * 100, so from a dialog stacked above it the panel would open underneath. Same reasoning as
+   * DieView's own `explain`.
+   */
+  readonly explain?: boolean | undefined
 }
 
 /**
@@ -40,7 +48,11 @@ export interface DeckPreviewProps {
  * "?" but labels it as hidden by a Nero di Seppia, which is a different thing entirely, so
  * these slots are rendered here instead.)
  */
-export function DeckPreview({ deck, variant = 'full' }: DeckPreviewProps): JSX.Element {
+export function DeckPreview({
+  deck,
+  variant = 'full',
+  explain = true,
+}: DeckPreviewProps): JSX.Element {
   const phone = useIsPhone()
   const size = SLOT_SIZE[variant]
   const gap = variant === 'full' ? 10 : 6
@@ -65,7 +77,13 @@ export function DeckPreview({ deck, variant = 'full' }: DeckPreviewProps): JSX.E
       {deck.map((id, i) => (
         // Slot index is the identity: the same ability never appears twice, and plain slots
         // are interchangeable.
-        <DeckSlot key={i} ability={id} size={size} showLabel={variant === 'full'} />
+        <DeckSlot
+          key={i}
+          ability={id}
+          size={size}
+          showLabel={variant === 'full'}
+          explain={explain}
+        />
       ))}
     </div>
   )
@@ -76,10 +94,12 @@ function DeckSlot({
   ability,
   size,
   showLabel,
+  explain,
 }: {
   ability: AbilityId | null
   size: number
   showLabel: boolean
+  explain: boolean
 }): JSX.Element {
   const spec = abilitySpec(ability)
   const accent = spec === null ? null : accentForAbility(spec.id)
@@ -87,7 +107,8 @@ function DeckSlot({
   // Same hover/hold panel as a die on the table. It matters most in the COMPACT variant: there
   // the slot is a 32px icon with no room for a name, and since the sidebar no longer carries a
   // catalogue of every ability, this is where you check what you brought to the match.
-  const tip = useDieTooltip({
+  // Called unconditionally (hook rules); `explain: false` drops what is used, not the call.
+  const live = useDieTooltip({
     icon: spec?.icon,
     name: spec?.name ?? 'Dado normale',
     description: spec?.description ?? 'Un dado a sei facce, senza abilità.',
@@ -97,6 +118,9 @@ function DeckSlot({
         : [spec.kind === 'malus' ? 'Malus' : 'Bonus', 'Nel mazzo — non ancora tirato.'],
     accent: accent ?? '#334155',
   })
+  const tip = explain
+    ? live
+    : { trigger: {}, panel: null, describedBy: undefined, consumeHold: () => false }
 
   return (
     // `alignSelf: start` so a two-line label (e.g. "Stella Essiccata") does not push its

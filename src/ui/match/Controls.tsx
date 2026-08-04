@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from 'react'
-import { abilitySpec, maxBetFor, type GameState } from '../../engine'
+import { maxBetFor, type GameState } from '../../engine'
 import { Hint, PrimaryButton, SecondaryButton } from '../components/Buttons'
 import type { UseGameDispatch } from '../handState'
 
@@ -89,44 +89,14 @@ export function Controls({
     )
   }
 
-  // MULINELLO_SELECT: unlike STEAL and REROLL_SELECT this is NOT driven inline on the dice.
-  // The choice is about one specific die the engine already identifies, so there is nothing
-  // to pick — only to accept or decline, which is a pair of buttons.
+  // MULINELLO_SELECT and PAGURO_SELECT are both answered in the ability menu now, which opens
+  // itself on arrival (see AbilityBar): every ability is used the same way, from one place. What
+  // stays here is the pointer, so a phase whose controls live in an overlay still says where.
   if (state.phase === 'MULINELLO_SELECT') {
-    return (
-      <div style={rowStyle}>
-        <PrimaryButton onClick={() => dispatch({ type: 'MULINELLO_ROLL', player: 'human' })}>
-          Ritira il dado {abilitySpec('MULINELLO')?.icon}
-        </PrimaryButton>
-        <SecondaryButton onClick={() => dispatch({ type: 'MULINELLO_PASS', player: 'human' })}>
-          Tieni così
-        </SecondaryButton>
-      </div>
-    )
+    return <Hint text="🎣 Dado Mulinello: apri «Usa abilità» per ritirare il dado o tenerlo." />
   }
-
-  // PAGURO_SELECT: three covered "shells" to pick from, blind. Like the Mulinello this is not
-  // driven on the dice in hand (the Paguro's three faces are not among them) — it is a choice
-  // among three hidden faces, so three identical covered buttons carry it. The faces stay
-  // secret until the pick lands: nothing here reads their values.
   if (state.phase === 'PAGURO_SELECT') {
-    return (
-      <div>
-        <Hint
-          text={`${abilitySpec('DADO_PAGURO')?.icon} Dado Paguro: scegli una delle tre conchiglie… al buio!`}
-        />
-        <div style={rowStyle}>
-          {[0, 1, 2].map((index) => (
-            <PrimaryButton
-              key={index}
-              onClick={() => dispatch({ type: 'PAGURO_CHOOSE', player: 'human', index })}
-            >
-              Conchiglia {index + 1} {abilitySpec('DADO_PAGURO')?.icon}
-            </PrimaryButton>
-          ))}
-        </div>
-      </div>
-    )
+    return <Hint text="🦀 Dado Paguro: apri «Usa abilità» per scegliere una conchiglia." />
   }
   return null
 }

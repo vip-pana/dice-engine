@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react'
+import { useEffect, useState, type JSX } from 'react'
 import { viewFor } from '../../engine'
 import { useGame } from '../useGame'
 import { difficultyLabel } from '../labels'
@@ -6,11 +6,12 @@ import { useIsPhone, useIsWide } from '../responsive'
 import { optionsForSetup, type Setup } from '../setup/setup'
 import { ReferenceStack } from '../sidebar/ReferenceStack'
 import { DeckPanel } from '../sidebar/DeckPanel'
-import { BotDeckPanel } from '../sidebar/BotDeckPanel'
 import { ReferencePanel } from '../sidebar/ReferencePanel'
 import { ScoreBar } from './ScoreBar'
 import { BotAutoPlayer } from './BotAutoPlayer'
 import { Table } from './Table'
+import { AbilityBar } from './AbilityBar'
+import type { AbilityFocus } from './AbilityModal'
 import { PhaseBanner } from './PhaseBanner'
 import { OutcomeBanner } from './OutcomeBanner'
 import { Controls } from './Controls'
@@ -39,6 +40,17 @@ export function Match({
   // advancing. Keyed on the hand NUMBER rather than a boolean: a plain `false` would have to be
   // reset on every new hand, and forgetting that reset means the next result never appears.
   const [outcomeDismissed, setOutcomeDismissed] = useState<number | null>(null)
+
+  // The ability menu: null closed, 'list' open, or the id of the opened row. ONE piece of state,
+  // so "open" and "which row" can never disagree.
+  const [abilityFocus, setAbilityFocus] = useState<AbilityFocus>(null)
+
+  // Closed at the hand boundary, and ONLY there. A menu left open across two hands would be
+  // listing the previous hand's abilities. It deliberately does NOT close on a phase change: the
+  // Lanterna is readable while the Bot acts, and a panel vanishing mid-read looks like a glitch.
+  useEffect(() => {
+    setAbilityFocus(null)
+  }, [trueState.handNumber])
 
   // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
   // Seppia must be unreadable here too — including indirectly, via the "current hand"
@@ -116,7 +128,14 @@ export function Match({
           </h1>
           <ScoreBar state={state} />
           <BotAutoPlayer state={trueState} dispatch={dispatch} difficulty={setup.difficulty} />
-          <Table state={state} dispatch={dispatch} grow={wide} />
+          <Table
+            state={state}
+            dispatch={dispatch}
+            grow={wide}
+            abilityFocus={abilityFocus}
+            onAbilityFocus={setAbilityFocus}
+          />
+          <AbilityBar state={state} onOpen={setAbilityFocus} />
           {/* Both banners are portalled overlays, so they render nothing here — they sit in this
               spot only because this is where the game they describe is. */}
           <PhaseBanner phase={state.phase} />
@@ -156,7 +175,10 @@ export function Match({
               onRebuildDeck={onRebuild}
               matchInProgress={state.phase !== 'MATCH_OVER'}
             />
-            <BotDeckPanel state={state} dispatch={dispatch} />
+            {/* The Bot's deck used to have a panel here, because the Lanterna's button had
+                nowhere else to live — Controls hides itself on the Bot's turn, which is exactly
+                when you want to peek. The ability menu is reachable in every phase, so the peek
+                moved there with every other ability. */}
             {/* Takes the remaining height, so the sidebar does not end in dead space below the
                 ranking ladder. */}
             <ReferencePanel state={state} grow={wide} />

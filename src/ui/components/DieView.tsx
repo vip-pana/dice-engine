@@ -49,6 +49,15 @@ export interface DieViewProps {
    * would need the offsets and their line-heights changed in lockstep for no visual gain.
    */
   readonly size?: number | undefined
+  /**
+   * Whether the die explains itself on hover / long press. Defaults to true.
+   *
+   * Pass false for a die rendered INSIDE an overlay. The tooltip is a portal at zIndex 100 (see
+   * DieTooltip), so from inside a dialog stacked above it the panel would open underneath the
+   * dialog — a rules panel you cannot read. Callers that opt out are expected to carry the rules
+   * text themselves; the ability modal does, at 13px, right above the dice.
+   */
+  readonly explain?: boolean | undefined
 }
 
 /** Ink-dark accent for a die whose face is hidden from the viewer. */
@@ -98,6 +107,7 @@ export function DieView(props: DieViewProps): JSX.Element {
     concealed = false,
     blindedToOpponent = false,
     size = 52,
+    explain = true,
   } = props
   // Derived from `size` so one number moves the whole die coherently. Ratios taken from the
   // original 52px die (6/52 padding, 10/52 radius, 24/52 glyph) so the default is unchanged.
@@ -125,7 +135,13 @@ export function DieView(props: DieViewProps): JSX.Element {
   // Hover it, or hold it down on a phone, and the die says what it is. This replaced the `title`
   // attribute that used to carry the same text: a native tooltip is mouse-only (a phone never
   // shows one at all), it truncates, and it cannot be styled to look like it belongs to the die.
-  const tip = useDieTooltip(dieInfo({ spec, value, concealed, blindedToOpponent, split, accent }))
+  // Called unconditionally — hook rules. `explain: false` gates what is USED, not the call: the
+  // trigger handlers, the aria link and the panel are all dropped, so an opted-out die never
+  // opens a panel it would render underneath its own dialog.
+  const live = useDieTooltip(dieInfo({ spec, value, concealed, blindedToOpponent, split, accent }))
+  const tip = explain
+    ? live
+    : { trigger: {}, panel: null, describedBy: undefined, consumeHold: () => false }
 
   return (
     <div

@@ -2,10 +2,9 @@ import { useEffect, useState, type JSX } from 'react'
 import { abilitySpec, evaluateHand, type AbilityId, type GameState, type Hand } from '../../../engine'
 import { categoryLabel } from '../../labels'
 import { useIsPhone } from '../../responsive'
-import { AbilityCard } from '../../components/AbilityCard'
 import { DieView } from '../../components/DieView'
 import { Hint, PrimaryButton } from '../../components/Buttons'
-import { liveFinalHand, spongeableThreats, type UseGameDispatch } from '../../handState'
+import { liveFinalHand, type UseGameDispatch } from '../../handState'
 import { EmptyDieSlot, HandBadge, Placeholder, diceRowStyle, useDieSize } from './shared'
 
 export function HumanRow({
@@ -14,21 +13,22 @@ export function HumanRow({
   aiming = false,
   torpedoTarget = null,
   spongeTarget = null,
-  onSponge,
 }: {
   state: GameState
   dispatch: UseGameDispatch
   /** A Torpedo target must be chosen before the reroll can be confirmed. */
   aiming?: boolean
+  /**
+   * The two values STAGED in the ability menu. They are chosen there but sent from here, because
+   * they are optional fields on the same REROLL action that carries the dice to throw — see
+   * RerollAction. This row is the only place that dispatches one.
+   */
   torpedoTarget?: number | null
-  /** The opponent ability a Dado Spugna will absorb, or null for none. Always optional. */
   spongeTarget?: AbilityId | null
-  onSponge?: (ability: AbilityId | null) => void
 }): JSX.Element {
   const hand = state.hands.human
   const selecting = state.phase === 'REROLL_SELECT' && state.toAct === 'human'
   const [selected, setSelected] = useState<readonly number[]>([])
-  const spongeChoices = spongeableThreats(state)
   const phone = useIsPhone()
   const dieSize = useDieSize()
 
@@ -126,43 +126,17 @@ export function HumanRow({
             Selezionati da rilanciare: {selected.length} / 4 (il dado rubato resta fisso)
           </span>
           {aiming && (
+            // The aim itself is made in the ability menu (see AbilityModal); this only reports
+            // where it stands. Without the "not yet" line the confirm button below is disabled
+            // for a reason the player cannot see.
             <div style={{ marginTop: 4 }}>
               <Hint
                 text={
                   torpedoTarget === null
-                    ? '⚡ Dado Torpedo: clicca un dado del Bot da elettrizzare.'
+                    ? '⚡ Devi scegliere un bersaglio: apri «Usa abilità».'
                     : `⚡ Bersaglio: dado ${torpedoTarget + 1} del Bot — perderà 1 allo showdown.`
                 }
               />
-            </div>
-          )}
-          {spongeChoices.length > 0 && (
-            // Only the abilities actually threatening this hand are offered — an empty list
-            // renders nothing, which is also what happens when the Spugna sits unstolen among
-            // the commons and therefore does nothing. Unlike the Torpedo there is no `disabled`
-            // gate: declining to sponge is a legal move, so the choice stays optional.
-            <div style={{ marginTop: 8 }}>
-              <Hint
-                text={`${abilitySpec('DADO_SPUGNA')?.icon} Dado Spugna: scegli un'abilità del Bot da annullare (facoltativo).`}
-              />
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  justifyContent: 'center',
-                  gap: 8,
-                  marginTop: 6,
-                }}
-              >
-                {spongeChoices.map((id) => (
-                  <AbilityCard
-                    key={id}
-                    id={id}
-                    active={spongeTarget === id}
-                    onToggle={() => onSponge?.(spongeTarget === id ? null : id)}
-                  />
-                ))}
-              </div>
             </div>
           )}
           <div style={{ marginTop: 6 }}>

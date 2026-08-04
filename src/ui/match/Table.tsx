@@ -7,16 +7,26 @@ import { RollOffView } from './rows/RollOffView'
 import { CommonRow } from './rows/CommonRow'
 import { BotRow } from './rows/BotRow'
 import { HumanRow } from './rows/HumanRow'
+import { AbilityModal, type AbilityFocus } from './AbilityModal'
 
 export function Table({
   state,
   dispatch,
   grow = false,
+  abilityFocus,
+  onAbilityFocus,
 }: {
   state: GameState
   dispatch: UseGameDispatch
   /** Stretch to fill the remaining column height (wide layout only). */
   grow?: boolean
+  /**
+   * The ability modal's open state, owned by Match (it is presentation state, like the log
+   * drawer's) but rendered from here: this is where the torpedo aim and the sponge target live,
+   * and the modal is a third consumer of them rather than a new owner.
+   */
+  abilityFocus: AbilityFocus
+  onAbilityFocus: (focus: AbilityFocus) => void
 }): JSX.Element {
   const primaryLabel = playerLabel(state.primary)
   const phone = useIsPhone()
@@ -114,7 +124,6 @@ export function Table({
             aiming={aiming}
             torpedoTarget={torpedoTarget}
             spongeTarget={spongeTarget}
-            onSponge={setSpongeTarget}
           />
         </Band>
       </div>
@@ -130,6 +139,20 @@ export function Table({
           ? 'Tieni premuto un dado per leggere nome e abilità.'
           : 'Passa il mouse su un dado per leggerne nome e abilità.'}
       </p>
+
+      {/* Portalled to the body, so rendering it from inside the felt's subtree costs nothing —
+          and the felt is `overflow: auto`, which would clip a fixed child rendered in place. */}
+      <AbilityModal
+        state={state}
+        dispatch={dispatch}
+        focus={abilityFocus}
+        onFocus={onAbilityFocus}
+        onClose={() => onAbilityFocus(null)}
+        torpedoTarget={torpedoTarget}
+        onAimTorpedo={setTorpedoTarget}
+        spongeTarget={spongeTarget}
+        onSponge={setSpongeTarget}
+      />
     </section>
   )
 }

@@ -206,8 +206,15 @@ async function checkMatch(page) {
     headings.join(' | '))
   check('hand ranking is still there', headings.some((h) => /Classifica mani/.test(h)))
   check('reference tabs are gone', (await page.locator('[role=tablist]').count()) === 0)
+  // Scoped to `aside`, which is what the label always claimed. Page-wide it also counted the
+  // ability modal's Spugna cards — those are Bonus/Malus buttons too, and legitimately so.
   check('no Bonus/Malus cards in the sidebar',
-    (await page.locator('button', { hasText: /Bonus|Malus/ }).count()) === 0)
+    (await page.locator('aside button', { hasText: /Bonus|Malus/ }).count()) === 0)
+  // The Lanterna's peek moved into the ability modal, so the sidebar no longer carries the
+  // Bot's deck: Controls hides itself on the Bot's turn, which is when a peek is wanted, and
+  // the modal is reachable in every phase.
+  check('the Bot deck panel is gone from the sidebar',
+    !headings.some((h) => /Mazzo del Bot/.test(h)), headings.join(' | '))
 
   // Every hand-ranking row must be visible without scrolling — the point of removing the card.
   const rows = await page.locator('text=/^(Scala di sei|Coppia)$/').count()
@@ -274,11 +281,64 @@ async function checkMatch(page) {
     check('reached the reroll phase', false, rerollPhase)
   }
 
+  await checkAbilityModal(page)
   await checkLogDrawer(page)
   // Only meaningful on the two-column layout: on a phone the column is folded into a <details>
   // and has no height to fill, which the code opts out of explicitly.
   if (!PHONE) await checkSidebarFillsColumn(page)
   if (PHONE) await checkPhoneDisclosure(page)
+}
+
+/**
+ * Every ability is used from one place now: «Usa abilità» and its modal.
+ *
+ * The button opens the menu even when nothing is pressable, deliberately — the explanation of
+ * what each held ability is waiting for lives inside, so a disabled button would lock the player
+ * out of the answer. That is asserted here, because it is the property most likely to be
+ * "tidied" into a disabled state later.
+ */
+async function checkAbilityModal(page) {
+  console.log('  (ability modal)')
+  const bar = page.getByRole('button', { name: /Usa abilità/ })
+  const dialog = page.locator('[role=dialog][aria-label*="abilit"]')
+
+  check('the modal is not open by default', (await dialog.count()) === 0)
+  if ((await bar.count()) === 0) {
+    // Only when the hand dealt no actionable ability at all — then there is nothing to show.
+    check('  no ability button, and no ability in hand', true, 'nothing actionable dealt')
+    return
+  }
+  check('the «Usa abilità» button is on the felt', true)
+  check('  it opens even with nothing pressable', await bar.first().isEnabled())
+
+  await bar.first().click()
+  check('clicking it opens the modal', (await dialog.count()) === 1)
+  const body = await dialog.innerText()
+  check('  it lists each held ability with its state', /Bonus|Malus/.test(body),
+    body.replace(/\n+/g, ' | ').slice(0, 80))
+
+  const box = await dialog.boundingBox()
+  const vp = page.viewportSize()
+  check('  it is fully within the viewport',
+    box !== null && box.x >= 0 && box.y >= 0 && box.x + box.width <= vp.width + 1,
+    box ? `${Math.round(box.width)}x${Math.round(box.height)} at (${Math.round(box.x)},${Math.round(box.y)})` : 'no box')
+  await shoot(page, 'match-ability-modal')
+
+  await page.keyboard.press('Escape')
+  check('Escape closes it', (await dialog.count()) === 0)
+
+  // Reopen, then click the SCRIM ELEMENT rather than a coordinate. A blind `mouse.click(x, y)`
+  // hits whatever is at those pixels if the dialog is not up — which is how this check once
+  // pressed "Cambia mazzo" in the sidebar and hung the run on its confirmation prompt.
+  await bar.first().click()
+  if ((await dialog.count()) === 1) {
+    // The scrim is the fixed full-viewport sibling of the dialog, so aim at a corner well away
+    // from the centred sheet.
+    await page.mouse.click(20, 20)
+    check('a click on the backdrop closes it', (await dialog.count()) === 0)
+  } else {
+    check('a click on the backdrop closes it', false, 'the modal did not reopen')
+  }
 }
 
 /** On a phone the reference stack folds away — and must no longer promise the log it lost. */
