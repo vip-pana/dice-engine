@@ -4,8 +4,15 @@ import type { GameState } from '../../engine'
 import { usePrefersReducedMotion } from '../responsive'
 import { ABILITY_ACCENT } from '../components/DieView'
 
-/** How long a phase announcement stays up before fading out, in ms. */
-const PHASE_BANNER_MS = 1100
+/**
+ * How long a phase announcement stays up before fading out, in ms.
+ *
+ * 1100ms was not enough to read it: the banner carries a label AND a line of instruction, and it
+ * was gone before the second one landed. Longer than BotAutoPlayer's 500ms move delay by a wide
+ * margin, which is fine — the banner takes no clicks except its own dismissal, so the game keeps
+ * playing underneath while it is up.
+ */
+const PHASE_BANNER_MS = 2100
 
 /**
  * Announces every phase change with a banner across the field.
