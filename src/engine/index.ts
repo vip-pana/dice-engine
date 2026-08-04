@@ -1,7 +1,10 @@
 // Public API of the pure rules engine.
 // This module (and everything under src/engine) MUST NOT import from React/DOM/Vite,
 // and MUST NOT use Date/window/Math.random. All randomness flows through an injected Rng.
-// Game state machine (game.ts) and bot (bot.ts) are added in later steps.
+//
+// The state machine is split across several modules, but only game.ts is re-exported here: it
+// re-exports the engine's whole public surface, which keeps the helpers the split had to make
+// `export`ed (assert, commit, setHand, seatHolds, …) out of this barrel.
 
 export * from './types'
 export * from './rng'

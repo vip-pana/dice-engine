@@ -10,13 +10,13 @@
 //
 // Seven abilities need more than a face, so their spec below is a plain-d6 stub and the real
 // effect lives elsewhere, where the state it acts on exists:
-//   - NERO_DI_SEPPIA hides INFORMATION -> applyConcealment in game.ts
-//   - DADO_D_ORO moves COINS           -> goldenPayoutSource in game.ts
-//   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in game.ts
+//   - NERO_DI_SEPPIA hides INFORMATION -> applyConcealment in abilityEffects.ts
+//   - DADO_D_ORO moves COINS           -> goldenPayoutSource in showdown.ts
+//   - DADO_TORPEDO moves a VALUE       -> applyTorpedoes in abilityEffects.ts
 //   - MULINELLO moves the PHASE ORDER  -> handleMulinello in game.ts
-//   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in game.ts
+//   - DADO_SPUGNA cancels ANOTHER ABILITY -> hasSponged in abilityQueries.ts
 //   - DADO_LANTERNA reveals INFORMATION   -> handleLanternPeek in game.ts
-//   - DADO_BRUMEGGIO reshapes the OPPONENT'S ROLLS -> RollModifiers below + isFogged in game.ts
+//   - DADO_BRUMEGGIO reshapes the OPPONENT'S ROLLS -> RollModifiers below + isFogged in abilityQueries.ts
 //   - DADO_PAGURO leaves the kept face to a PLAYER CHOICE -> handlePaguroChoose in game.ts
 // All eight are named here so the pattern is discoverable from the registry. A new ability
 // that only decides a face still needs nothing but an entry in this table.
@@ -205,9 +205,9 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     kind: 'buff',
     // Not ownOnly: an unclaimed common Seppia belongs to nobody, so it blinds BOTH seats,
     // and narrows to the opponent alone once a player steals it (see applyConcealment and
-    // releaseCommonConcealment in game.ts). That gives the "no owner" case a real target.
+    // releaseCommonConcealment in abilityEffects.ts). That gives the "no owner" case a real target.
     // Value-wise a plain d6 — the die itself is ordinary. Its power is informational and
-    // is applied by the reducer when the hand is dealt (see applyConcealment in game.ts),
+    // is applied by the reducer when the hand is dealt (see applyConcealment in abilityEffects.ts),
     // because AbilitySpec is only allowed to decide faces.
     //
     // Spongeable by REVERSAL, not prevention: this lands on entry into STEAL, before a sponge
@@ -247,7 +247,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Not ownOnly: an unstolen common Torpedo zaps both seats, so it has a real effect with
     // no owner and must not be filtered out of the commons.
     // Value-wise a plain d6. Its power is a -1 on someone else's die, applied by the reducer
-    // at showdown time (see applyTorpedoes in game.ts), because AbilitySpec is only allowed
+    // at showdown time (see applyTorpedoes in abilityEffects.ts), because AbilitySpec is only allowed
     // to decide faces — and because applying it any earlier would let a reroll undo it.
     // Spongeable: the -1 has not landed yet when a target is chosen. Note a sponged Torpedo
     // still CONSUMES its Rng draws (see applyTorpedoes) — only the damage is cancelled.
@@ -294,7 +294,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // the commons. Not spongeable by explicit design call — a sponge war would resolve by
     // seat order, which would make the primary role decide it rather than the players.
     // Value-wise a plain d6. Its power is the absence of someone else's power, applied
-    // wherever an effect is read (see isNullified in game.ts).
+    // wherever an effect is read (see hasSponged in abilityQueries.ts).
     diceRolled: 1,
     roll: (rng) => [rng.rollDie()],
     resolve: (rolls) => rolls[0]!,
@@ -363,7 +363,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilitySpec>> = {
     // Value-wise a plain d6. Its power is applied at ROLL TIME to somebody else's dice, which
     // is a third home for an effect: not in `roll` below (a spec may only decide its own face)
     // and not at one moment in the reducer (there is no one moment — every roll of the hand is
-    // fogged). See RollModifiers above and isFogged in game.ts.
+    // fogged). See RollModifiers above and isFogged in abilityQueries.ts.
     //
     // Spongeable by REVERSAL, like NERO_DI_SEPPIA and for the same reason: the fog is already
     // on the first roll, long before a sponge target can be named in REROLL_SELECT, so the
@@ -465,7 +465,7 @@ export function rollDieWithAbility(
   //
   // FIXED DRAW COUNT: always exactly 2 * diceRolled faces, never "roll once and maybe again".
   // A draw count that varied with the faces would shift the downstream stream and break
-  // seeded replay — the project's fixed-draw rule, see applyTorpedoes in game.ts.
+  // seeded replay — the project's fixed-draw rule, see applyTorpedoes in abilityEffects.ts.
   if (spec === null) {
     const rolls = [rng.rollDie(), rng.rollDie()] as const
     // A fogged plain die DOES carry a `rolls` array, unlike a clear one: the split is the only

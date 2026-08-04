@@ -42,7 +42,7 @@ export type AbilityId =
    *
    * The first ability that changes a VALUE, and someone else's at that — so like the two
    * above its effect cannot live in AbilitySpec.roll. Two moments, deliberately split (see
-   * applyTorpedoes in game.ts): the owner picks the victim die during REROLL_SELECT, and
+   * applyTorpedoes in abilityEffects.ts): the owner picks the victim die during REROLL_SELECT, and
    * the -1 lands at the showdown. Applying it earlier would let the victim reroll the
    * zapped die and undo it for free, since a reroll rebuilds the die from its ability alone.
    *
@@ -75,7 +75,7 @@ export type AbilityId =
    * Soaks up one opponent ability of the holder's choosing, cancelling its effect.
    *
    * The first ability aimed at other ABILITIES rather than at dice, so it has to reach every
-   * point where an effect is applied (see isNullified in game.ts). Which abilities it can
+   * point where an effect is applied (see hasSponged in abilityQueries.ts). Which abilities it can
    * absorb is declared per-ability by `spongeable` on AbilitySpec, not listed here — an
    * ability whose face is decided at roll time cannot be cancelled after the fact, because
    * the face is already committed to Die.value and the rolled alternatives are gone.
@@ -116,7 +116,7 @@ export type AbilityId =
    * (so not `roll`), and there is no single moment for the reducer to act on (so not there
    * either) — the first roll, both rerolls and a Mulinello's third roll are all fogged. It
    * therefore lives at the one choke point every hand die passes through, as a RollModifiers
-   * argument to rollDieWithAbility, with `isFogged` in game.ts answering who is fogged.
+   * argument to rollDieWithAbility, with `isFogged` in abilityQueries.ts answering who is fogged.
    *
    * Not held state: the fog is re-derived at every roll from whoever holds the die, which is
    * what lets a sponge lift it with nothing to clear. Note the two SOURCES, deliberately

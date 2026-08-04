@@ -187,7 +187,7 @@ export interface PlayerHandState {
    * The OPPONENT ability this seat's Dado Spugna cancels for the hand, or null.
    *
    * Chosen during REROLL_SELECT, like torpedoTarget, but consumed differently: it is read
-   * wherever an effect would fire (see isNullified in game.ts) rather than at one moment.
+   * wherever an effect would fire (see hasSponged in abilityQueries.ts) rather than at one moment.
    * Identified by AbilityId alone, which cancels EVERY instance acting against this seat —
    * the opponent's held copy and any unstolen common one. "The sponge soaks up the ability",
    * not one physical die: dice have no stable identity here (a reroll rebuilds them), so an
