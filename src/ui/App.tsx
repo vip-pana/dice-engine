@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ALL_ABILITY_IDS,
   ALL_DIFFICULTIES,
@@ -30,7 +31,7 @@ import {
 } from '../engine'
 import { useGame } from './useGame'
 import { categoryLabel, difficultyBlurb, difficultyLabel, playerLabel } from './labels'
-import { DIE_SIZE, useIsPhone, useIsWide } from './responsive'
+import { DIE_SIZE, useIsPhone, useIsWide, usePrefersReducedMotion } from './responsive'
 import { AbilityCard } from './components/AbilityCard'
 import { DeckBuilder } from './components/DeckBuilder'
 import { DeckPreview } from './components/DeckPreview'
@@ -354,11 +355,30 @@ function Match({
   const wide = useIsWide()
   const phone = useIsPhone()
 
+  // Presentation state, not game state, so it lives here and never reaches useGame: the engine
+  // reducer has no business knowing whether a panel is open, and a match replayed from a seed
+  // must not depend on it.
+  const [logOpen, setLogOpen] = useState(false)
+
+  // Which hand's result the player has waved away, so the final dice can be inspected without
+  // advancing. Keyed on the hand NUMBER rather than a boolean: a plain `false` would have to be
+  // reset on every new hand, and forgetting that reset means the next result never appears.
+  const [outcomeDismissed, setOutcomeDismissed] = useState<number | null>(null)
+
   // Render the HUMAN's view, never the raw state: a die hidden by the bot's Nero di
   // Seppia must be unreadable here too — including indirectly, via the "current hand"
   // badge, which would otherwise reveal the hidden face by naming the category.
   // BotAutoPlayer still receives the raw state; the bot filters its own view internally.
   const state = viewFor(trueState, 'human')
+
+  // Derived rather than stored, so it cannot fall out of step with the phase: the result is on
+  // screen when the hand has one to show and the player has not waved it away.
+  const outcomeShowing =
+    (state.phase === 'SHOWDOWN' ||
+      state.phase === 'HAND_COMPLETE' ||
+      state.phase === 'MATCH_OVER') &&
+    state.lastShowdown !== null &&
+    outcomeDismissed !== state.handNumber
 
   return (
     <div
@@ -420,18 +440,34 @@ function Match({
             difficulty={setup.difficulty}
           />
           <Table state={state} dispatch={dispatch} grow={wide} />
-          <OutcomeBanner state={state} />
-          <Controls
+          {/* Both banners are portalled overlays, so they render nothing here — they sit in this
+              spot only because this is where the game they describe is. */}
+          <PhaseBanner phase={state.phase} />
+          <OutcomeBanner
             state={state}
             dispatch={dispatch}
+            open={outcomeShowing}
+            onDismiss={() => setOutcomeDismissed(state.handNumber)}
             onNewMatch={() => newMatch()}
             onRebuildDeck={onRebuild}
           />
-          {/* The log's newest line, inline with the game, so the phone layout can keep the full
-              log folded away without hiding what just happened. */}
-          {phone && <LastMove log={state.log} />}
+          {/* `showTerminalButtons` is false while the result overlay is up, because the overlay
+              carries those very buttons. Without it "Mano successiva" is on screen twice, and the
+              copy down here is the one hidden behind the overlay. */}
+          <Controls
+            state={state}
+            dispatch={dispatch}
+            showTerminalButtons={!outcomeShowing}
+            onNewMatch={() => newMatch()}
+            onRebuildDeck={onRebuild}
+          />
+          {/* The log's newest line, inline with the game. Shown at EVERY size now, not just on a
+              phone: the full log lives in a drawer, so on a desktop too this is the only thing
+              that says what the bot just did without opening it. */}
+          <LastMove log={state.log} onOpenLog={() => setLogOpen(true)} />
         </main>
-        {/* Reference column: your deck, the rules references (tabbed), then the running log. */}
+        {/* Reference column: your deck, the bot's deck, the hand ranking. The running log used to
+            end this column and now lives in a drawer (see LogDrawer). */}
         <aside
           style={{
             display: 'flex',
@@ -448,12 +484,14 @@ function Match({
               matchInProgress={state.phase !== 'MATCH_OVER'}
             />
             <BotDeckPanel state={state} dispatch={dispatch} />
+            {/* Takes the remaining height now that the log card is gone from this column —
+                otherwise the sidebar would end in dead space below the ranking ladder. */}
             <ReferencePanel state={state} grow={wide} />
-            {/* Takes the remaining height, so the log reaches the bottom of the page. */}
-            <ActionLog log={state.log} grow={wide} />
           </ReferenceStack>
         </aside>
       </div>
+
+      <LogDrawer log={state.log} open={logOpen} onClose={() => setLogOpen(false)} />
     </div>
   )
 }
@@ -463,7 +501,7 @@ function Match({
  * phone.
  *
  * Stacking the column under the game (which is what the single-column grid does) is right for a
- * tablet and wrong for a phone: the deck, both rule references and the whole log come to well
+ * tablet and wrong for a phone: the deck, the bot's deck and the ranking ladder come to well
  * over 2000px of material that the player has to scroll PAST to reach nothing, because the game
  * itself is already above it. Folded, the first screenful is the game and the reference is one
  * tap away.
@@ -489,8 +527,10 @@ function ReferenceStack({
         // Fill the column (the aside is a stretched grid item) rather than sizing to content.
         // Without this the panels inside cannot grow either — their `flex: 1` resolves against
         // a container that is already exactly as tall as they are — and the sidebar ends in dead
-        // space with the log squeezed to its natural height. It shows now that one panel fewer
-        // is stacked here; the folded phone layout has no column height to fill, so it opts out.
+        // space below the last panel. That matters more with every card that leaves this column:
+        // the ranking ladder is now the only one that grows, so it alone answers for the height
+        // the log used to absorb. The folded phone layout has no column height to fill, so it
+        // opts out.
         ...(phone ? null : { flex: '1 1 auto', minHeight: 0 }),
       }}
     >
@@ -515,7 +555,7 @@ function ReferenceStack({
           listStyle: 'revert',
         }}
       >
-        Mazzo, regole e registro
+        Mazzo e regole
       </summary>
       <div style={{ padding: '0 12px 12px' }}>{stack}</div>
     </details>
@@ -523,33 +563,76 @@ function ReferenceStack({
 }
 
 /**
- * The most recent log line, shown on the phone layout only.
+ * The most recent log line, plus the way into the whole log.
  *
- * The full log lives inside the folded reference stack, and a player should not have to open it
- * to learn that the bot just raised. This surfaces exactly the newest entry — the one piece of
- * the log that is about the moment you are in.
+ * Shown at every viewport size. It used to be phone-only, because on a wide screen the full log
+ * was a permanent sidebar card; now the log is a drawer at every size, so this is always the only
+ * thing on screen that says what just happened.
+ *
+ * The newest line and the "read the rest" button belong together rather than in the controls row:
+ * they are one idea — here is what happened, and here is where the history is — and the controls
+ * row is for acting on the hand, not for looking things up.
  */
-function LastMove({ log }: { log: readonly string[] }): JSX.Element | null {
+function LastMove({
+  log,
+  onOpenLog,
+}: {
+  log: readonly string[]
+  onOpenLog: () => void
+}): JSX.Element | null {
   const last = log[log.length - 1]
   if (last === undefined) {
     return null
   }
   return (
-    <p
+    <div
       style={{
         margin: '14px 0 0',
         padding: '10px 12px',
         borderRadius: 10,
         background: '#111c31',
         border: '1px solid #1e293b',
-        color: '#94a3b8',
-        fontSize: 13,
-        lineHeight: 1.45,
-        overflowWrap: 'anywhere',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
       }}
     >
-      {last}
-    </p>
+      <p
+        style={{
+          margin: 0,
+          // Takes the space and wraps; `minWidth: 0` is what lets it shrink below its text
+          // width instead of pushing the button off the row.
+          flex: 1,
+          minWidth: 0,
+          color: '#94a3b8',
+          fontSize: 13,
+          lineHeight: 1.45,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {last}
+      </p>
+      <button
+        type="button"
+        onClick={onOpenLog}
+        style={{
+          flexShrink: 0,
+          minHeight: 36,
+          padding: '6px 12px',
+          borderRadius: 8,
+          border: '1px solid #334155',
+          background: 'transparent',
+          color: '#94a3b8',
+          fontFamily: 'inherit',
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        📜 Registro
+      </button>
+    </div>
   )
 }
 
@@ -845,12 +928,13 @@ function ReferencePanel({
         minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
-        // Growing: share the leftover column height with ActionLog rather than taking a
-        // fixed slice. A `maxHeight` here would still be a floor the log has to pay for on
-        // a short viewport — which is how the log got squeezed to zero in the first place.
-        // Flexing with `minHeight: 0` lets BOTH panels shrink and scroll internally, so
-        // neither can starve the other. Not growing (stacked layout): natural height, and
-        // the body caps itself below.
+        // Growing: takes the leftover column height. It used to SHARE that height with the log
+        // card, which is why this is a flex rather than a `maxHeight` — a fixed cap here was a
+        // floor the log had to pay for on a short viewport, and that is how the log once got
+        // squeezed to zero. The log has since moved to a drawer, so this panel is the only
+        // claimant left, but the flex stays: it is also what keeps the column from ending in
+        // dead space, and `minHeight: 0` is what lets the ladder scroll internally instead of
+        // overflowing. Not growing (stacked layout): natural height, and the body caps itself.
         ...(grow ? { flex: '1 1 0', minHeight: 0 } : null),
       }}
     >
@@ -919,15 +1003,147 @@ function categoryOf(hand: PlayerHandState): HandCategory | null {
 }
 
 // ---------------------------------------------------------------------------
+// Phase banner: announces each phase change across the field
+// ---------------------------------------------------------------------------
+
+/** How long a phase announcement stays up before fading out, in ms. */
+const PHASE_BANNER_MS = 1100
+
+/**
+ * Announces every phase change with a banner across the field.
+ *
+ * The phase used to be a line of small text above the felt, which in a game with ten phases —
+ * several of them named after abilities (Mulinello, Paguro) — nobody read. The moment that
+ * matters is the CHANGE: it is when you have to notice that it is your turn and what the turn
+ * is for.
+ *
+ * NON-BLOCKING, and that is the load-bearing property. BotAutoPlayer acts on a 500ms timer, so a
+ * modal banner would have the bot playing behind a curtain while the felt changed underneath it.
+ * The container is `pointer-events: none` and only the banner itself takes clicks (to dismiss
+ * early), so everything under it stays live while it is up. It also never gates a dispatch: it
+ * reads `phase` and renders, and the game does not know it exists.
+ *
+ * The three outcome phases are suppressed here — they get OutcomeBanner instead, which waits for
+ * a click because it has something to read.
+ */
+function PhaseBanner({ phase }: { phase: GameState['phase'] }): JSX.Element | null {
+  const reducedMotion = usePrefersReducedMotion()
+  const [shown, setShown] = useState<GameState['phase'] | null>(null)
+  // The phase we have already announced. A ref, not state: changing it must not re-render, and
+  // it starts AT the mounting phase so opening a match does not announce "Tiro iniziale" — that
+  // is the phase you arrived in, not a change, and announcing it is noise.
+  const announced = useRef<GameState['phase']>(phase)
+
+  useEffect(() => {
+    if (phase === announced.current) {
+      return
+    }
+    announced.current = phase
+    // The outcome phases have their own banner; announcing them twice would collide with it.
+    if (phase === 'SHOWDOWN' || phase === 'HAND_COMPLETE' || phase === 'MATCH_OVER') {
+      setShown(null)
+      return
+    }
+    setShown(phase)
+    const id = setTimeout(() => setShown(null), PHASE_BANNER_MS)
+    // Cleared on the next change: SHOWDOWN -> HAND_COMPLETE happens in one tick, and a stale
+    // timer from the previous phase would otherwise switch off the banner that just appeared.
+    return () => clearTimeout(id)
+  }, [phase])
+
+  if (shown === null) {
+    return null
+  }
+
+  return createPortal(
+    <div
+      // Centred over the field, and TRANSPARENT to the pointer — see the note above.
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+        // Above the felt, below the log drawer (200): a phase change while the drawer is open
+        // must not print itself over what you opened the drawer to read.
+        zIndex: 150,
+        padding: 16,
+      }}
+    >
+      <div
+        role="status"
+        aria-live="polite"
+        onClick={() => setShown(null)}
+        style={{
+          // The one element that takes clicks, so tapping the banner skips the wait without
+          // making the rest of the screen inert.
+          pointerEvents: 'auto',
+          cursor: 'pointer',
+          maxWidth: 'min(92vw, 560px)',
+          textAlign: 'center',
+          padding: '18px 34px',
+          borderRadius: 14,
+          background: '#0b1220f2',
+          border: `2px solid ${ABILITY_ACCENT}`,
+          boxShadow: `0 0 40px #020617cc, 0 0 0 1px #0f172a`,
+          animation: reducedMotion ? undefined : 'phaseIn 260ms ease-out',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            letterSpacing: 2,
+            textTransform: 'uppercase',
+            color: ABILITY_ACCENT,
+          }}
+        >
+          {phaseLabel(shown)}
+        </div>
+        <div style={{ marginTop: 6, fontSize: 15, color: '#e2e8f0', lineHeight: 1.4 }}>
+          {PHASE_BLURB[shown]}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Outcome banner: prominent result of the last showdown / match
 // ---------------------------------------------------------------------------
 
-function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
-  const show =
-    state.phase === 'SHOWDOWN' ||
-    state.phase === 'HAND_COMPLETE' ||
-    state.phase === 'MATCH_OVER'
-  if (!show || state.lastShowdown === null) {
+/**
+ * The result of the hand, as an overlay that WAITS.
+ *
+ * The one banner that does not fade: there are two hands to read, plus whatever a Torpedo or a
+ * Dado d'Oro did to them, and a second is not enough for any of that. It closes on the button
+ * that also advances the game — one click instead of two, which is why the "Mano successiva" /
+ * "Nuova partita" buttons moved in here out of Controls.
+ *
+ * It used to be a card in the flow under the felt, where the headline competed with the dice for
+ * attention and lost.
+ */
+function OutcomeBanner({
+  state,
+  dispatch,
+  open,
+  onDismiss,
+  onNewMatch,
+  onRebuildDeck,
+}: {
+  state: GameState
+  dispatch: UseGameDispatch
+  /** Whether the result is currently on screen. Owned by Match — see `outcomeOpen` there. */
+  open: boolean
+  onDismiss: () => void
+  onNewMatch: () => void
+  onRebuildDeck: () => void
+}): JSX.Element | null {
+  const reducedMotion = usePrefersReducedMotion()
+
+  if (!open || state.lastShowdown === null) {
     return null
   }
 
@@ -946,39 +1162,88 @@ function OutcomeBanner({ state }: { state: GameState }): JSX.Element | null {
         ? 'Pareggio: piatto diviso, si rigioca.'
         : `${playerLabel(winner!)} ${winner === 'human' ? 'hai' : 'ha'} vinto la mano!`
 
-  return (
-    <section
+  return createPortal(
+    <div
       style={{
-        marginTop: 16,
-        padding: '14px 16px',
-        borderRadius: 10,
-        background: bg,
-        border: `2px solid ${border}`,
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        background: '#020617bb',
+        // Above the phase banner (150), below the log drawer (200) — reading the history of the
+        // hand you just lost is a reasonable thing to want on top of the result.
+        zIndex: 160,
       }}
     >
-      <div style={{ fontSize: 20, fontWeight: 800 }}>{headline}</div>
-      <div style={{ marginTop: 6, fontSize: 14, color: '#e2e8f0' }}>
-        Tu: <strong>{categoryLabel(sd.human)}</strong> [{sd.human.values.join(' ')}] · Bot:{' '}
-        <strong>{categoryLabel(sd.bot)}</strong> [{sd.bot.values.join(' ')}]
-      </div>
-      {torpedoNotes(state).map((line) => (
-        // A face that differs from what was on the table a second ago is the single most
-        // confusing thing the showdown can show. Say why, where it cannot be missed.
-        <div
-          key={line}
-          style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: ACCENT_BY_KIND.malus }}
-        >
-          ⚡ {line}
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="Esito della mano"
+        style={{
+          maxWidth: 'min(92vw, 520px)',
+          maxHeight: '86vh',
+          overflowY: 'auto',
+          padding: '18px 20px',
+          borderRadius: 12,
+          background: bg,
+          border: `2px solid ${border}`,
+          boxShadow: '0 24px 60px #020617cc',
+          animation: reducedMotion ? undefined : 'phaseIn 220ms ease-out',
+        }}
+      >
+        <div style={{ fontSize: 20, fontWeight: 800 }}>{headline}</div>
+        <div style={{ marginTop: 6, fontSize: 14, color: '#e2e8f0' }}>
+          Tu: <strong>{categoryLabel(sd.human)}</strong> [{sd.human.values.join(' ')}] · Bot:{' '}
+          <strong>{categoryLabel(sd.bot)}</strong> [{sd.bot.values.join(' ')}]
         </div>
-      ))}
-      {goldenPayoutNote(state) !== null && (
-        // A doubled pot is the most surprising thing that can happen to the bankroll, and
-        // the log line explaining it scrolls away. Repeat it where it cannot be missed.
-        <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: GOLD_ACCENT }}>
-          🪙 {goldenPayoutNote(state)}
+        {torpedoNotes(state).map((line) => (
+          // A face that differs from what was on the table a second ago is the single most
+          // confusing thing the showdown can show. Say why, where it cannot be missed.
+          <div
+            key={line}
+            style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: ACCENT_BY_KIND.malus }}
+          >
+            ⚡ {line}
+          </div>
+        ))}
+        {goldenPayoutNote(state) !== null && (
+          // A doubled pot is the most surprising thing that can happen to the bankroll, and
+          // the log line explaining it scrolls away. Repeat it where it cannot be missed.
+          <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: GOLD_ACCENT }}>
+            🪙 {goldenPayoutNote(state)}
+          </div>
+        )}
+
+        {/*
+          The way on, in the banner rather than under it: the click that closes this is the click
+          that continues, so reading the result costs no extra step. SHOWDOWN gets no button
+          because the reducer moves straight to HAND_COMPLETE — there is nothing to advance yet,
+          and offering a dead button would read as a stuck game.
+        */}
+        <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {state.phase === 'HAND_COMPLETE' && (
+            <PrimaryButton onClick={() => dispatch({ type: 'NEXT_HAND' })}>
+              Mano successiva
+            </PrimaryButton>
+          )}
+          {state.phase === 'MATCH_OVER' && (
+            <>
+              <PrimaryButton onClick={onNewMatch}>Nuova partita</PrimaryButton>
+              <SecondaryButton onClick={onRebuildDeck}>Cambia mazzo</SecondaryButton>
+            </>
+          )}
+          {state.phase !== 'SHOWDOWN' && (
+            // An escape hatch that does NOT advance the hand, for looking at the final dice. The
+            // same buttons then appear under the felt (see Controls), which is why they are
+            // hidden there while this is open — otherwise "Mano successiva" is on screen twice.
+            <SecondaryButton onClick={onDismiss}>Guarda il tavolo</SecondaryButton>
+          )}
         </div>
-      )}
-    </section>
+      </section>
+    </div>,
+    document.body,
   )
 }
 
@@ -1066,9 +1331,11 @@ function Table({
           : undefined
       }
     >
+      {/* The phase is announced by PhaseBanner and repeated by the per-phase hint under the
+          felt, so naming it here as well was the third copy — and the least visible of the
+          three, which is what prompted the banner in the first place. */}
       <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>
-        Primario di mano: <strong>{primaryLabel}</strong> · Fase:{' '}
-        <strong>{phaseLabel(state.phase)}</strong>
+        Primario di mano: <strong>{primaryLabel}</strong>
       </p>
 
       <RollOffView state={state} />
@@ -1199,15 +1466,24 @@ function Band({ grow, children }: { grow: boolean; children: ReactNode }): JSX.E
       style={
         grow
           ? {
-              flex: '1 1 auto',
-              minHeight: 0,
+              // Cap the BREATHING ROOM, never the content. `minHeight` instead of `maxHeight`
+              // inverts the constraint: 140px is now the FLOOR that gives a short row its airy
+              // spacing, and a tall row is free to exceed it. `flex: 0 0 auto` stops the band
+              // from stretching on a tall viewport, which is the other half of what the old cap
+              // was for.
+              //
+              // This used to be `flex: '1 1 auto'` with `maxHeight: 140`, and that broke the
+              // REROLL phase. A die there gains its value chips ("2 3 2") and a "preso" /
+              // "rubato" caption, which pushes a row to ~176px — 36px past the cap. maxHeight
+              // does not scroll and does not expand: the excess simply painted OUTSIDE the
+              // band, over the neighbouring section, so "DADI COMUNI" and "I TUOI DADI" landed
+              // on top of each other 2px apart. A cap on a box whose content can grow has to
+              // be a cap on its SLACK, not on its size.
+              flex: '0 0 auto',
+              minHeight: 140,
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'center',
-              // Cap the breathing room so a very tall viewport does not strand the rows
-              // far apart. Roughly two dice tall: enough to feel airy, close enough that
-              // the three bands still read as one table.
-              maxHeight: 140,
             }
           : undefined
       }
@@ -1633,35 +1909,51 @@ function Placeholder({ text }: { text: string }): JSX.Element {
 function Controls({
   state,
   dispatch,
+  showTerminalButtons = true,
   onNewMatch,
   onRebuildDeck,
 }: {
   state: GameState
   dispatch: UseGameDispatch
+  /**
+   * Whether to render the end-of-hand / end-of-match buttons here.
+   *
+   * False while OutcomeBanner is up, because that overlay holds the same buttons — the click that
+   * closes the result is the click that continues. They still belong here for when the player
+   * dismisses the overlay to look at the final dice: without them there would be no way on.
+   */
+  showTerminalButtons?: boolean
   onNewMatch: () => void
   onRebuildDeck: () => void
 }): JSX.Element {
   const rowStyle = { display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' as const }
 
+  // MATCH_OVER and HAND_COMPLETE are driven from inside OutcomeBanner, which holds "Nuova
+  // partita" / "Cambia mazzo" / "Mano successiva". The buttons live there so the click that
+  // closes the result is the click that continues; duplicating them here would put the same
+  // action in two places, and the copy under the felt would be the one hidden behind the
+  // overlay. What stays here is the case where the banner has been dismissed by hand — then
+  // there has to be a way on that is not behind a closed overlay.
   if (state.phase === 'MATCH_OVER') {
-    // The winner headline is shown by OutcomeBanner; here we only offer a restart. "Nuova
-    // partita" keeps the deck (and re-rolls the bot's); "Cambia mazzo" goes back to the
-    // builder, since a deck is fixed for the whole match by design.
-    return (
+    return showTerminalButtons ? (
       <div style={rowStyle}>
         <PrimaryButton onClick={onNewMatch}>Nuova partita</PrimaryButton>
         <SecondaryButton onClick={onRebuildDeck}>Cambia mazzo</SecondaryButton>
       </div>
+    ) : (
+      <></>
     )
   }
 
   if (state.phase === 'HAND_COMPLETE') {
-    return (
+    return showTerminalButtons ? (
       <div style={rowStyle}>
         <PrimaryButton onClick={() => dispatch({ type: 'NEXT_HAND' })}>
           Mano successiva
         </PrimaryButton>
       </div>
+    ) : (
+      <></>
     )
   }
 
@@ -1870,89 +2162,186 @@ function BettingControls({
 }
 
 // ---------------------------------------------------------------------------
-// Action log
+// Action log: a drawer, opened from the controls row
 // ---------------------------------------------------------------------------
 
 /**
- * Running commentary, in the reference column under the ability catalogue.
+ * The whole match history, in a drawer that slides in from the right.
  *
- * Auto-scrolls to the newest line: in a sidebar the panel is short, so without this the
- * latest event — the one you actually need — would sit out of sight below the fold.
+ * It used to be a permanent card at the bottom of the reference column, taking whatever height
+ * was left. That is a lot of standing real estate for something you consult and leave — and it
+ * competed with the felt, which is the thing you actually look at. What stays on screen is the
+ * NEWEST line only (see LastMove), because "what did the bot just do?" is the one part of the log
+ * that is about the moment you are in.
+ *
+ * Portalled to the body for the same reason DieTooltip is: the felt and the sidebar panels are
+ * both `overflow: auto`, so a fixed panel rendered inside the tree gets clipped by an ancestor
+ * exactly when it needs to escape one.
+ *
+ * Returns null when closed, so it costs no nodes and no listeners while it is not in use.
  */
-function ActionLog({
+function LogDrawer({
   log,
-  grow = false,
+  open,
+  onClose,
 }: {
   log: readonly string[]
-  /** Fill the remaining sidebar height instead of sizing to content. */
-  grow?: boolean
-}): JSX.Element {
+  open: boolean
+  onClose: () => void
+}): JSX.Element | null {
+  const phone = useIsPhone()
+  const reducedMotion = usePrefersReducedMotion()
   const boxRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
 
+  // Opens already scrolled to the newest line. The log only grows, so the bottom is where the
+  // interesting end is — and this is why the drawer does not need a "jump to latest".
   useEffect(() => {
+    if (!open) {
+      return
+    }
     const box = boxRef.current
     if (box !== null) {
       box.scrollTop = box.scrollHeight
     }
-  }, [log])
+  }, [open, log])
 
-  return (
-    <section
-      style={{
-        padding: 14,
-        borderRadius: 12,
-        background: '#0b1220',
-        border: '1px solid #1e293b',
-        minWidth: 0,
-        // Stretching to the bottom of the page: the panel grows, and the scrollable list
-        // inside it grows with it (see maxHeight below).
-        ...(grow
-          ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
-          : null),
-      }}
-    >
-      <h2
-        style={{
-          margin: '0 0 8px',
-          fontSize: 14,
-          fontWeight: 700,
-          color: '#94a3b8',
-          letterSpacing: 0.3,
-        }}
-      >
-        Log
-      </h2>
+  // Focus lands on the close button, so a keyboard user has somewhere to be inside the dialog
+  // rather than still standing on the page behind it.
+  useEffect(() => {
+    if (open) {
+      closeRef.current?.focus()
+    }
+  }, [open])
+
+  // Escape closes, the one dismissal a keyboard user has. Registered only while open — same
+  // shape as DieTooltip's, which documents why this listener is worth its cost.
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) {
+    return null
+  }
+
+  return createPortal(
+    <>
+      {/* The scrim. A click here closes: an element, not a document-wide pointerdown listener,
+          which is the simplification a modal gets over DieTooltip's latched panel. */}
       <div
-        ref={boxRef}
+        onClick={onClose}
         style={{
-          overflowY: 'auto',
-          // 13, not 12: this is running prose on a phone, and it is the only record of what the
-          // bot did.
-          fontSize: 13,
-          lineHeight: 1.6,
-          // Long log lines must wrap inside the narrow column rather than widen it.
-          overflowWrap: 'anywhere',
-          // Growing: take whatever height the panel has. Otherwise cap it, so a long log
-          // does not push the page down on a stacked layout. The cap stays even on a phone:
-          // unlike the reference panel the log GROWS all match, so uncapped it would turn the
-          // opened disclosure into an endless scroll.
-          ...(grow ? { flex: 1, minHeight: 0 } : { maxHeight: 260 }),
+          position: 'fixed',
+          inset: 0,
+          background: '#020617cc',
+          // Above DieTooltip's 100: a die's rules panel must not float over the drawer.
+          zIndex: 200,
+        }}
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="Registro della partita"
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          // Full width on a phone, where 380px of a 390px viewport would leave a useless
+          // 10px sliver of game behind it.
+          width: phone ? '100%' : 380,
+          maxWidth: '100%',
+          zIndex: 201,
+          display: 'flex',
+          flexDirection: 'column',
+          background: '#0b1220',
+          borderLeft: '1px solid #1e293b',
+          boxShadow: '-16px 0 40px #020617aa',
+          // Slides in from its own edge. Skipped entirely when the reader asked for less
+          // motion — a panel flying across the screen is precisely what that setting means.
+          animation: reducedMotion ? undefined : 'drawerIn 180ms ease-out',
         }}
       >
-        {log.map((line, i) => (
-          <div
-            key={i}
+        <header
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '14px 16px',
+            borderBottom: '1px solid #1e293b',
+            flexShrink: 0,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#e2e8f0' }}>
+            📜 Registro
+          </h2>
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Chiudi il registro"
             style={{
-              color: i === log.length - 1 ? '#e2e8f0' : '#64748b',
-              fontWeight: i === log.length - 1 ? 600 : 400,
-              paddingBottom: 3,
+              minWidth: 44,
+              minHeight: 44,
+              borderRadius: 8,
+              border: '1px solid #334155',
+              background: 'transparent',
+              color: '#94a3b8',
+              fontSize: 16,
+              cursor: 'pointer',
             }}
           >
-            {line}
-          </div>
-        ))}
-      </div>
-    </section>
+            ✕
+          </button>
+        </header>
+
+        <div
+          ref={boxRef}
+          style={{
+            // Fills the drawer and scrolls inside it. No height cap any more: the cap existed
+            // because the card sat in the page flow and a long log pushed everything down.
+            // A fixed panel has its own bounded height, so the list simply gets all of it.
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '12px 16px 16px',
+            // 13, not 12: this is running prose, and it is the only record of what the bot did.
+            fontSize: 13,
+            lineHeight: 1.6,
+            // Long lines must wrap inside the drawer rather than widen it.
+            overflowWrap: 'anywhere',
+          }}
+        >
+          {log.length === 0 ? (
+            <p style={{ margin: 0, color: '#64748b' }}>Ancora nessuna mossa.</p>
+          ) : (
+            log.map((line, i) => (
+              <div
+                key={i}
+                style={{
+                  color: i === log.length - 1 ? '#e2e8f0' : '#64748b',
+                  fontWeight: i === log.length - 1 ? 600 : 400,
+                  paddingBottom: 3,
+                }}
+              >
+                {line}
+              </div>
+            ))
+          )}
+        </div>
+      </aside>
+    </>,
+    document.body,
   )
 }
 
@@ -2077,6 +2466,30 @@ function spongeableThreats(state: GameState): readonly AbilityId[] {
 function liveFinalHand(hand: PlayerHandState): Hand | null {
   if (hand.own === null || hand.stolen === null) return null
   return [hand.own[0], hand.own[1], hand.own[2], hand.own[3], hand.stolen]
+}
+
+/**
+ * One line saying what to DO in each phase, for the phase banner.
+ *
+ * A total Record rather than a switch with a default: the eleventh phase then fails to compile
+ * until someone writes its line, which is the same forcing function ABILITIES applies to the
+ * ability registry. A default would silently announce a new phase with no explanation.
+ *
+ * Worded as an instruction where there is something to do, and as a statement where there is
+ * not (the three terminal phases). Kept short on purpose — this is a banner that shows for about
+ * a second, not documentation.
+ */
+const PHASE_BLURB: Record<GameState['phase'], string> = {
+  ROLL_OFF: 'Tira il dado: il più alto inizia la mano',
+  INITIAL_BET: 'Punta prima di vedere i dadi',
+  STEAL: 'Ruba un dado comune — il primario sceglie per primo',
+  REROLL_SELECT: 'Scegli quali dadi rilanciare (il rubato resta fisso)',
+  MULINELLO_SELECT: 'Puoi tirare il dado del Mulinello una terza volta',
+  PAGURO_SELECT: 'Scegli un guscio, al buio',
+  SECOND_BET: 'Punta di nuovo, ora che i dadi sono definitivi',
+  SHOWDOWN: 'Si confrontano le mani',
+  HAND_COMPLETE: 'Mano conclusa',
+  MATCH_OVER: 'Partita conclusa',
 }
 
 function phaseLabel(phase: GameState['phase']): string {

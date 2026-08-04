@@ -55,6 +55,18 @@ export function useIsPhone(): boolean {
 }
 
 /**
+ * Whether the reader has asked the system for less animation.
+ *
+ * Not a breakpoint, but it belongs here: it is the same `matchMedia` subscription, and this app
+ * has no stylesheet to put an `@media (prefers-reduced-motion)` block in. A panel that slides in
+ * from the edge is exactly the kind of motion this preference exists for, so anything that
+ * animates position has to ask.
+ */
+export function usePrefersReducedMotion(): boolean {
+  return useMediaQuery('(prefers-reduced-motion: reduce)')
+}
+
+/**
  * Edge of a die, in px, per layout.
  *
  * Sized so a whole row fits a small phone without wrapping: five dice plus four 8px gaps is

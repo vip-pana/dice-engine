@@ -7,7 +7,7 @@
     <style>
       /*
         The only document-level styling in the app (everything else is inline styles on
-        components), so it is deliberately minimal — two rules that cannot be expressed
+        components), so it is deliberately minimal — five rules that cannot be expressed
         per-component.
 
         1. border-box everywhere: with the default content-box, any padded element given a
@@ -35,6 +35,38 @@
         */
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
+      }
+
+      /*
+        4. The log drawer's entrance. A @keyframes cannot be written as an inline style at all,
+           which is why this one rule lives here rather than on the component. Whether it RUNS is
+           still decided in JS: LogDrawer omits the animation entirely when the reader has asked
+           for reduced motion (see usePrefersReducedMotion), so there is no motion to override
+           here and no need for a media query around it.
+      */
+      @keyframes drawerIn {
+        from {
+          transform: translateX(100%);
+        }
+        to {
+          transform: translateX(0);
+        }
+      }
+
+      /*
+        5. The phase / outcome banner's entrance. Same reason as above: keyframes cannot be
+           inline. Scale plus fade rather than a slide, because this one appears in the MIDDLE of
+           the field — it should read as arriving toward the reader, not as passing across.
+      */
+      @keyframes phaseIn {
+        from {
+          opacity: 0;
+          transform: scale(0.94);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
       }
     </style>
   </head>
