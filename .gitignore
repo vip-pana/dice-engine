@@ -6,3 +6,6 @@ dist
 
 # Personal Claude Code settings; project-shared settings.json stays tracked.
 .claude/settings.local.json
+
+# Screenshots from `pnpm ui:check` — build output of a check, not source.
+.ui-check
