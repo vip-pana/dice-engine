@@ -145,7 +145,9 @@ function SeatLabel({
   highlight?: boolean
 }): JSX.Element {
   return (
-    <div style={{ marginBottom: 8 }}>
+    // Centred over its own row of dice, which is centred too — a left-aligned label above a
+    // centred row reads as a mistake rather than as a heading.
+    <div style={{ marginBottom: 8, textAlign: 'center' }}>
       <span
         style={{
           fontSize: 11,

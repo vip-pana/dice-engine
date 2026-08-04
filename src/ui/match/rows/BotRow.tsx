@@ -4,7 +4,7 @@ import { categoryLabel } from '../../labels'
 import { useIsPhone } from '../../responsive'
 import { DieView } from '../../components/DieView'
 import { liveFinalHand } from '../../handState'
-import { HandBadge, Placeholder, diceRowStyle, useDieSize } from './shared'
+import { EmptyDieSlot, HandBadge, Placeholder, diceRowStyle, useDieSize } from './shared'
 
 export function BotRow({
   state,
@@ -61,9 +61,9 @@ export function BotRow({
               size={dieSize}
             />
           ) : (
-            <Placeholder text="dado rubato" />
+            <EmptyDieSlot text="dado rubato" size={dieSize} />
           )}
-          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live ownLine={phone} />}
+          {live && <HandBadge label={categoryLabel(evaluateHand(live))} live />}
         </>
       )}
     </div>

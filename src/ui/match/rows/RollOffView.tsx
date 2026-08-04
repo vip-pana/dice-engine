@@ -31,6 +31,9 @@ export function RollOffView({ state }: { state: GameState }): JSX.Element | null
         display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',
+        // Centred like the three bands below it, so the roll-off does not sit off to one side of
+        // the table it decides who starts.
+        justifyContent: 'center',
         gap: 16,
         padding: '10px 14px',
         borderRadius: 10,

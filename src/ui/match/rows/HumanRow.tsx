@@ -6,7 +6,7 @@ import { AbilityCard } from '../../components/AbilityCard'
 import { DieView } from '../../components/DieView'
 import { Hint, PrimaryButton } from '../../components/Buttons'
 import { liveFinalHand, spongeableThreats, type UseGameDispatch } from '../../handState'
-import { HandBadge, Placeholder, diceRowStyle, useDieSize } from './shared'
+import { EmptyDieSlot, HandBadge, Placeholder, diceRowStyle, useDieSize } from './shared'
 
 export function HumanRow({
   state,
@@ -38,7 +38,13 @@ export function HumanRow({
   }, [selecting, state.handNumber])
 
   if (hand.own === null) {
-    return <Placeholder text="In attesa del lancio" />
+    // Centred where the dice will be, like BotRow's own waiting state (which already sits inside
+    // the row style).
+    return (
+      <div style={diceRowStyle(phone)}>
+        <Placeholder text="In attesa del lancio" />
+      </div>
+    )
   }
 
   const toggle = (i: number): void => {
@@ -100,20 +106,22 @@ export function HumanRow({
             size={dieSize}
           />
         ) : (
-          <Placeholder text="dado rubato" />
+          <EmptyDieSlot text="dado rubato" size={dieSize} />
         )}
         {liveHand &&
           (hand.own.some((d) => d.concealed) ? (
             // One die is unknown, so the category is unknowable: showing the one computed
             // from the placeholder would be a confident lie.
-            <HandBadge label="Mano incerta — un dado è nascosto" live ownLine={phone} />
+            <HandBadge label="Mano incerta — un dado è nascosto" live />
           ) : (
-            <HandBadge label={categoryLabel(evaluateHand(liveHand))} live ownLine={phone} />
+            <HandBadge label={categoryLabel(evaluateHand(liveHand))} live />
           ))}
       </div>
 
       {selecting && (
-        <div style={{ marginTop: 10 }}>
+        // Centred with the dice it acts on: the count, the hints and the confirm button all
+        // belong to the row above them, so they share its middle.
+        <div style={{ marginTop: 10, textAlign: 'center' }}>
           <span style={{ fontSize: 13, color: '#94a3b8' }}>
             Selezionati da rilanciare: {selected.length} / 4 (il dado rubato resta fisso)
           </span>
@@ -137,7 +145,15 @@ export function HumanRow({
               <Hint
                 text={`${abilitySpec('DADO_SPUGNA')?.icon} Dado Spugna: scegli un'abilità del Bot da annullare (facoltativo).`}
               />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  gap: 8,
+                  marginTop: 6,
+                }}
+              >
                 {spongeChoices.map((id) => (
                   <AbilityCard
                     key={id}

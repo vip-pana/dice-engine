@@ -17,11 +17,17 @@ export function CommonRow({
   const phone = useIsPhone()
   const dieSize = useDieSize()
   if (state.common === null) {
-    return <Placeholder text="Non ancora lanciati" />
+    // Wrapped in the row style rather than returned bare: it stands where the dice will, so it
+    // has to be centred like them.
+    return (
+      <div style={diceRowStyle(phone)}>
+        <Placeholder text="Non ancora lanciati" />
+      </div>
+    )
   }
   return (
-    // Left-aligned like the two seat rows: the three bands share one spine so the eye can
-    // compare dice across them.
+    // Centred like the two seat rows: the three bands share one spine so the eye can compare
+    // dice across them.
     <div style={diceRowStyle(phone)}>
       {state.common.map((die, index) => {
         const taken = state.stolenCommonIndices.includes(index)

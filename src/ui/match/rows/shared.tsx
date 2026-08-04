@@ -9,12 +9,18 @@ import { DIE_SIZE, useIsPhone } from '../../responsive'
  * phone. Without `flexWrap` the excess pushes the page wider than the screen, and a mobile
  * browser answers that by scaling the whole app down. The phone die size (DIE_SIZE.phone) is
  * chosen so a full row still fits on one line at 320px anyway.
+ *
+ * CENTRED, so the three bands read as one table rather than as three left-aligned lists: the
+ * commons sit between the two hands competing for them, and that only looks like a table if all
+ * three share a middle. A wrapped second line centres too, which is what keeps a six-item row
+ * from looking like a ragged paragraph.
  */
 export function diceRowStyle(phone: boolean): CSSProperties {
   return {
     display: 'flex',
     flexWrap: 'wrap',
     alignItems: 'flex-start',
+    justifyContent: 'center',
     columnGap: phone ? 8 : 12,
     rowGap: phone ? 10 : 12,
   }
@@ -29,23 +35,44 @@ export function Placeholder({ text }: { text: string }): JSX.Element {
   return <span style={{ color: '#64748b', fontSize: 13, fontStyle: 'italic' }}>{text}</span>
 }
 
-export function HandBadge({
-  label,
-  live = false,
-  ownLine = false,
-}: {
-  label: string
-  live?: boolean
-  /**
-   * Put the badge on its own line below the dice instead of at the end of their row.
-   *
-   * Used on phones. The badge's text is the longest thing in the row — "Mano incerta — un dado è
-   * nascosto" runs ~250px — so beside the dice it either wraps into a tall blob or pushes the row
-   * past the screen. A `flexBasis: 100%` item takes a full flex line, which is how it drops below
-   * without either row needing a different structure.
-   */
-  ownLine?: boolean
-}): JSX.Element {
+/**
+ * The empty stolen-die slot, exactly one die wide.
+ *
+ * The width is what makes it a SLOT rather than a caption. As free-flowing text "dado rubato" is
+ * ~74px against a 52px die, and in a centred row that 22px of excess shifts every die in the row
+ * off the felt's middle — so the human row drifted from the two rows above it purely because its
+ * steal had not landed yet. Pinned to the die edge, the row centres on five equal positions
+ * whether or not the die has arrived, and nothing moves when it does.
+ */
+export function EmptyDieSlot({ text, size }: { text: string; size: number }): JSX.Element {
+  return (
+    <span
+      style={{
+        width: size,
+        display: 'inline-block',
+        textAlign: 'center',
+        color: '#64748b',
+        fontSize: 13,
+        fontStyle: 'italic',
+        lineHeight: 1.3,
+      }}
+    >
+      {text}
+    </span>
+  )
+}
+
+/**
+ * The hand category pill, on its own line below the dice.
+ *
+ * ALWAYS its own line, at every viewport size, and that is what keeps the three bands sharing one
+ * spine. The badge is the longest thing in a row — "Mano incerta — un dado è nascosto" runs
+ * ~250px — so as a member of a centred row it shoves the dice left of the felt's middle by half
+ * its own width. Only the bot and human rows carry one, so the two seats drifted while the
+ * commons stayed put, and the table stopped reading as a table. Dropping it below leaves the
+ * dice, and only the dice, deciding where the row centres.
+ */
+export function HandBadge({ label, live = false }: { label: string; live?: boolean }): JSX.Element {
   const pill = (
     <span
       style={{
@@ -65,10 +92,8 @@ export function HandBadge({
       {label}
     </span>
   )
-  if (ownLine) {
-    // The wrapper takes the line; the pill inside keeps hugging its text rather than stretching
-    // into a full-width bar.
-    return <div style={{ flexBasis: '100%', minWidth: 0 }}>{pill}</div>
-  }
-  return <span style={{ marginLeft: 8 }}>{pill}</span>
+  // `flexBasis: 100%` takes a whole flex line; the pill inside keeps hugging its text rather than
+  // stretching into a full-width bar, and `textAlign` is what centres it — the row's
+  // `justifyContent` only places this full-width wrapper, not the pill within it.
+  return <div style={{ flexBasis: '100%', minWidth: 0, textAlign: 'center' }}>{pill}</div>
 }
